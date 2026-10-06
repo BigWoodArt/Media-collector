@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.4
+- Big downloads: live bar (`12.3 MB of 75 MB - 1.4 MB/s`) and a **Skip file** button. **Stop** now cuts a download
+  within about a second. New Settings option: skip files over N MB (checked from the size header, before downloading).
+- Duplicates: a new file byte-identical to any file already in the collection (from any site) is removed, and content you
+  delete with the X is never fetched again from another site. Existing files are hashed once and cached.
+- No console window: `run.bat` starts `collector.pyw` (errors go to `collector_crash.log`).
+- HTTP call logging and transient-error retries are now actually switched on in the app (they were only on in tests).
+- Reddit wait note reads "Reddit rate limiting - waiting Ns".
+
 ## v0.1.3
 - Find now covers the booru family (Gelbooru, Realbooru, Hypnohub, Rule34, Safebooru, TBIB, Xbooru): tag lookups with
   post counts, trying each engine's known autocomplete route.

@@ -8,6 +8,126 @@ import urllib.error
 import urllib.request
 
 _local = threading.local()
+
+
+class DownloadInterrupted(Exception):
+    """Raised inside a download when the user pressed Stop or Skip (or the file exceeds the size limit)."""
+
+
+class DownloadControl:
+    """Per-thread hooks for downloads: stop (Event-like), skip (Event), a size cap and a progress callback.
+    on_progress(done_bytes, total_bytes_or_0, bytes_per_second, url); a final call has done == total == 0."""
+    def __init__(self, stop, skip, max_bytes=0, on_progress=None):
+        self.stop, self.skip, self.max_bytes, self.on_progress = stop, skip, max_bytes, on_progress
+
+
+def set_control(ctl):
+    _local.ctl = ctl
+
+
+def clear_control():
+    _local.ctl = None
+
+
+_TEXTY = ("json", "text", "xml", "html", "javascript")
+PROGRESS_MIN = 262144        # don't report tiny API replies
+
+
+class _Stream:
+    """Wraps a response for a job thread: reads in small steps so Stop/Skip act within about a second,
+    enforces the size cap and reports progress. Everything else is passed through."""
+
+    def __init__(self, resp, ctl, url):
+        self._r, self._ctl, self._url = resp, ctl, url
+        self._done, self._t0, self._last = 0, time.time(), 0.0
+        try:
+            self._total = int(resp.headers.get("Content-Length") or 0)
+        except Exception:
+            self._total = 0
+        try:
+            self._texty = any(t in (resp.headers.get("Content-Type") or "").lower() for t in _TEXTY)
+        except Exception:
+            self._texty = True
+        ctl.skip.clear()                 # a Skip pressed between files must not hit this one
+        try:                             # short socket waits so a stalled transfer can be interrupted
+            resp.fp.raw._sock.settimeout(1.0)
+            self._short = True
+        except Exception:
+            self._short = False
+        self._idle_limit = 30.0
+
+    def __getattr__(self, name):
+        return getattr(self._r, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def close(self):
+        self._r.close()
+
+    def _check(self):
+        if self._ctl.stop.is_set():
+            raise DownloadInterrupted("Stopped by user")
+        if self._ctl.skip.is_set():
+            self._ctl.skip.clear()
+            raise DownloadInterrupted("Skipped by user")
+        cap = self._ctl.max_bytes
+        if cap and not self._texty and (self._total > cap or self._done > cap):
+            raise DownloadInterrupted(f"Skipped: larger than the {cap // 1048576} MB limit")
+
+    def _report(self, final=False):
+        cb = self._ctl.on_progress
+        if not cb or self._texty:
+            return
+        now = time.time()
+        if final:
+            if self._reported:
+                cb(0, 0, 0.0, self._url)
+            return
+        if self._done < PROGRESS_MIN and self._total < PROGRESS_MIN:
+            return
+        if now - self._last >= 0.25:
+            self._last, self._reported = now, True
+            cb(self._done, self._total, self._done / max(now - self._t0, 0.001), self._url)
+
+    _reported = False
+
+    def _step(self, n):
+        idle = time.time()
+        while True:
+            self._check()
+            try:
+                if self._short and hasattr(self._r, "read1"):
+                    data = self._r.read1(n)
+                else:
+                    data = self._r.read(n)
+                return data
+            except (socket.timeout, TimeoutError):
+                if time.time() - idle > self._idle_limit:
+                    raise
+
+    def read(self, amt=None):
+        if amt is not None and amt >= 0:
+            data = self._step(amt)
+            self._done += len(data)
+            self._report(final=not data)
+            return data
+        chunks = []
+        try:
+            while True:
+                data = self._step(65536)
+                if not data:
+                    break
+                chunks.append(data)
+                self._done += len(data)
+                self._report()
+        finally:
+            self._report(final=True)
+        return b"".join(chunks)
 _orig_urlopen = urllib.request.urlopen
 _installed = False
 _SECRET_RE = re.compile(r"((?:token|api_key|apikey|user_id|key)=)[^&\s]+", re.I)
@@ -75,7 +195,8 @@ def _wrapped(req, *args, **kwargs):
         if status is None and hasattr(resp, "getcode"):
             status = resp.getcode()
         _record(url, status, started, retry=attempt if attempt else None)
-        return resp
+        ctl = getattr(_local, "ctl", None)
+        return _Stream(resp, ctl, url) if ctl else resp
 
 
 def install():

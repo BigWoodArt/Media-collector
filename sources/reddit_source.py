@@ -31,14 +31,14 @@ class RateLimiter:
         self.min_interval = min_interval
         self.last = 0.0
 
-    notify = None          # optional log(msg, level): told when we are about to sit out Reddit's rate limit
+    notify = None          # optional log(msg, level): told when we are about to sit out Reddit rate limiting
 
     def wait(self):
         elapsed = time.time() - self.last
         if elapsed < self.min_interval:
             gap = self.min_interval - elapsed
             if self.notify and gap > 0.8:
-                self.notify(f"WAIT|{gap:.1f}|Reddit's rate limit", "wait")
+                self.notify(f"WAIT|{gap:.1f}|Reddit rate limiting", "wait")
             time.sleep(gap)
         self.last = time.time()
 
@@ -147,7 +147,7 @@ class RedditSource(Source):
             except urllib.error.HTTPError as e:
                 if e.code == 429 and attempt < retries:
                     log("[HTTP 429] Rate limited by Reddit, waiting 60s...", "warning")
-                    log("WAIT|60|Reddit asked us to slow down", "wait")
+                    log("WAIT|60|Reddit rate limiting", "wait")
                     time.sleep(60)
                     continue
                 log(f"[HTTP Error {e.code}] {e.reason} -> {url}", "error")

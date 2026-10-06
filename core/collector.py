@@ -1,6 +1,7 @@
 """Headless collection engine: a Collection (folder + memory of what was fetched/rejected) and a Job that runs
 a list of Picks (site + search value) in one worker thread and reports through an event queue.
 No UI imports, so it is fully testable."""
+import hashlib
 import json
 import os
 import queue
@@ -17,6 +18,7 @@ from core.util import safe_name
 
 from concurrent.futures import ThreadPoolExecutor
 
+netlog.install()      # log every HTTP call, retry transient errors, make downloads stoppable/skippable
 from sources import SOURCE_BY_ID, SOURCE_CLASSES
 from sources.base import Source
 
@@ -74,6 +76,7 @@ class Pick:
 class Options:
     limit: int = 50
     types: set = field(default_factory=lambda: {"image", "video"})   # used when a pick has no types of its own
+    max_mb: int = 0                             # skip downloads larger than this (0 = no limit)
 
 
 class Collection:
@@ -84,7 +87,10 @@ class Collection:
         self.dir = os.path.join(root, safe_name(name, "collection"))
         self.seen = set()
         self.rejected = set()
+        self.rejected_hashes = set()   # content you deleted with the X: never re-downloaded from another site
         self.picks = []          # saved searches (list of Pick), so a collection reopens as you left it
+        self.hash_cache = {}     # relative path -> [size, mtime, md5], so unchanged files are never re-hashed
+        self._by_hash = {}       # md5 -> path of the first copy (duplicate check across all sources)
         self._lock = threading.Lock()
         self._load()
 
@@ -97,7 +103,10 @@ class Collection:
                 data = json.load(f)
             self.seen = set(data.get("seen", []))
             self.rejected = set(data.get("rejected", []))
+            self.rejected_hashes = set(data.get("rejected_hashes", []))
             self.picks = [p for p in (Pick.from_dict(d) for d in data.get("picks", [])) if p]
+            self.hash_cache = {k: v for k, v in (data.get("hashes") or {}).items()
+                               if isinstance(v, list) and len(v) == 3}
         except (OSError, ValueError, AttributeError, TypeError):
             pass
 
@@ -105,7 +114,8 @@ class Collection:
         os.makedirs(self.dir, exist_ok=True)
         with self._lock:
             payload = {"seen": sorted(self.seen), "rejected": sorted(self.rejected),
-                       "picks": [p.to_dict() for p in self.picks]}
+                       "rejected_hashes": sorted(self.rejected_hashes),
+                       "picks": [p.to_dict() for p in self.picks], "hashes": dict(self.hash_cache)}
         tmp = self._path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
@@ -117,6 +127,10 @@ class Collection:
 
     def reject(self, post_id, file_path):
         """Delete the file and never fetch that post again."""
+        try:
+            self.rejected_hashes.add(file_md5(file_path))
+        except OSError:
+            pass
         with self._lock:
             self.seen.add(post_id)
             self.rejected.add(post_id)
@@ -124,6 +138,56 @@ class Collection:
             os.remove(file_path)
         except OSError:
             pass
+
+    def index_hashes(self, stop=None):
+        """Hash every media file already in the collection (cached by size+mtime) so a new download that is
+        byte-identical to ANY earlier file, from any site, can be recognised. Returns (files, newly_hashed)."""
+        found, cache, fresh = {}, {}, 0
+        for base, _, files in os.walk(self.dir):
+            for fn in files:
+                if fn == MANIFEST or fn.endswith(".tmp"):
+                    continue
+                if stop is not None and stop.is_set():
+                    break
+                full = os.path.join(base, fn)
+                rel = os.path.relpath(full, self.dir)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                if st.st_size == 0:
+                    continue
+                c = self.hash_cache.get(rel)
+                if not c or c[0] != st.st_size or abs(c[1] - st.st_mtime) > 1:
+                    try:
+                        c = [st.st_size, st.st_mtime, file_md5(full)]
+                    except OSError:
+                        continue
+                    fresh += 1
+                cache[rel] = c
+                found.setdefault(c[2], full)
+        with self._lock:
+            self.hash_cache, self._by_hash = cache, found
+        return len(cache), fresh
+
+    def duplicate_of(self, path):
+        """Path of an earlier byte-identical file, or None (and remember this one)."""
+        try:
+            st = os.stat(path)
+            if st.st_size == 0:
+                return None
+            h = file_md5(path)
+        except OSError:
+            return None
+        with self._lock:
+            if h in self.rejected_hashes:
+                return "(a file you deleted earlier)"
+            other = self._by_hash.get(h)
+            if other and other != path and os.path.exists(other):
+                return other
+            self._by_hash[h] = path
+            self.hash_cache[os.path.relpath(path, self.dir)] = [st.st_size, st.st_mtime, h]
+        return None
 
     def skip_ids(self):
         with self._lock:
@@ -141,6 +205,14 @@ class Collection:
                     z.write(full, os.path.relpath(full, self.dir))
                     n += 1
         return n
+
+
+def file_md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 class CombinedStop:
@@ -167,6 +239,11 @@ class Job:
         self.stop_event = threading.Event()
         self.thread = None
         self.total = 0
+        self.skip_event = threading.Event()
+
+    def skip_current(self):
+        """Abandon the file being downloaded right now and carry on with the next one."""
+        self.skip_event.set()
 
     def start(self):
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -179,12 +256,22 @@ class Job:
         self.events.put(event)
 
     def _run(self):
+        netlog.set_control(netlog.DownloadControl(
+            self.stop_event, self.skip_event, max(0, int(self.options.max_mb or 0)) * 1048576,
+            lambda done, total, bps, url: self._emit("dl", done, total, bps, url)))
         try:
+            try:
+                n, fresh = self.collection.index_hashes(self.stop_event)
+                self._emit("log", f"duplicate check: {n} existing file(s) indexed ({fresh} newly hashed)", "debug")
+            except Exception as ex:
+                self._emit("log", f"duplicate indexing failed: {type(ex).__name__}: {ex}", "warning")
             for pick in self.picks:
                 if self.stop_event.is_set():
                     break
                 self._run_pick(pick)
         finally:
+            netlog.clear_control()
+            self._emit("dl", 0, 0, 0.0, "")
             try:
                 self.collection.save()
             except OSError as ex:
@@ -216,9 +303,11 @@ class Job:
             self._emit("pick_done", pick, 0, "failed", f"bad settings for this site: {ex}")
             return
 
-        errors, kept, skipped = [], [], {"error_page": 0, "type": 0}
+        errors, kept, skipped = [], [], {"error_page": 0, "type": 0, "duplicate": 0}
 
         def log_cb(msg, level="info"):
+            if level == "error" and any(t in msg for t in ("Skipped by user", "Stopped by user", "Skipped: larger")):
+                level = "warning"                       # your own choice, not a site failure
             if level == "error":
                 errors.append(msg)
             self._emit("log", f"[{label}] {msg}", level)
@@ -237,6 +326,14 @@ class Job:
                 self._emit("log", f"[{label}] dropped {item.post_id} ({item.media_type} not selected)", "debug")
                 _rm(item.file_path)
                 self.collection.mark_seen(item.post_id)     # don't re-download a type you excluded
+                return
+            twin = self.collection.duplicate_of(item.file_path)
+            if twin:
+                skipped["duplicate"] += 1
+                self.collection.mark_seen(item.post_id)
+                self._emit("log", f"[{label}] duplicate {item.post_id}: identical to {os.path.relpath(twin, self.collection.dir) if os.path.isabs(twin) else twin}"
+                                  " - removed", "info")
+                _rm(item.file_path)
                 return
             self.collection.mark_seen(item.post_id)
             kept.append(item)
@@ -273,7 +370,9 @@ class Job:
             elif not kept and errors:
                 status, detail = "failed", errors[-1]
             elif not kept:
-                status, detail = "empty", "nothing new matched"
+                status = "empty"
+                detail = (f"{skipped['duplicate']} duplicate(s) of files you already have"
+                          if skipped["duplicate"] else "nothing new matched")
         self._emit("log", f"[{label}] END status={status} kept={len(kept)} skipped={skipped} "
                           f"http_calls={len(http)} seconds={time.time() - started:.1f}", "debug")
         pick.status, pick.kept = status, len(kept)

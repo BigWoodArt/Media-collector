@@ -3,6 +3,7 @@ import json
 import os
 import queue
 import tempfile
+import threading
 import unittest
 import zipfile
 from unittest import mock
@@ -111,7 +112,7 @@ class CollectorTests(unittest.TestCase):
         job = Job(col, [Pick("fake", "cat")], Options())
         job.stop()
         ev = drain(job)
-        self.assertEqual([e[0] for e in ev], ["done"])
+        self.assertEqual([e[0] for e in ev if e[0] not in ("log", "dl")], ["done"])
 
     def test_export_zip_excludes_bookkeeping(self):
         col, ev = self.run_job([Pick("fake", "cat")])
@@ -240,3 +241,82 @@ class SiteCheckAndHelpers(unittest.TestCase):
         got = {r["id"]: r["result"] for r in res}
         self.assertEqual(got, {"good": "ok", "empty": "empty", "bad": "fail"})
         self.assertIn("down", [r for r in res if r["id"] == "bad"][0]["detail"])
+
+
+class DownloadControlAndDupes(unittest.TestCase):
+    def _serve(self, payload):
+        import io, urllib.request as ur
+        class R(io.BytesIO):
+            headers = {"Content-Length": str(len(payload)), "Content-Type": "video/mp4"}
+            status = 200
+        return mock.patch.object(ur, "urlopen", lambda *a, **k: R(payload)) , R
+
+    def _wrap(self, payload, ctl):
+        import io
+        from core import netlog
+        class R(io.BytesIO):
+            headers = {"Content-Length": str(len(payload)), "Content-Type": "video/mp4"}
+        return netlog._Stream(R(payload), ctl, "http://x/big.mp4")
+
+    def test_stop_interrupts_a_download(self):
+        from core import netlog
+        stop = threading.Event()
+        stop.set()
+        s = self._wrap(b"x" * 500000, netlog.DownloadControl(stop, threading.Event()))
+        with self.assertRaises(netlog.DownloadInterrupted):
+            s.read()
+
+    def test_skip_interrupts_and_clears(self):
+        from core import netlog
+        skip = threading.Event()
+        ctl = netlog.DownloadControl(threading.Event(), skip)
+        s = self._wrap(b"x" * 500000, ctl)
+        skip.set()
+        with self.assertRaises(netlog.DownloadInterrupted):
+            s.read()
+        self.assertFalse(skip.is_set())
+
+    def test_size_cap_and_progress(self):
+        from core import netlog
+        seen = []
+        ctl = netlog.DownloadControl(threading.Event(), threading.Event(), 0, lambda *a: seen.append(a))
+        data = self._wrap(b"x" * 600000, ctl).read()
+        self.assertEqual(len(data), 600000)
+        self.assertEqual(seen[-1][:2], (0, 0))           # final "finished" call
+        capped = netlog.DownloadControl(threading.Event(), threading.Event(), 100000)
+        with self.assertRaises(netlog.DownloadInterrupted):
+            self._wrap(b"x" * 600000, capped).read()
+
+    def test_duplicates_across_sources_are_dropped(self):
+        tmp = tempfile.mkdtemp()
+        class Twin(FakeSource):
+            id, label = "twin", "Twin"
+
+            def fetch(self, *a, **k):
+                k["skip_ids"] = None            # a different site would use its own post ids
+                return super().fetch(*a, **k)
+        with mock.patch.dict(SOURCE_BY_ID, {"fake": FakeSource, "twin": Twin}):
+            col = Collection(tmp, "C")
+            ev = drain(Job(col, [Pick("fake", "a"), Pick("twin", "a")], Options()))
+        done = [e for e in ev if e[0] == "pick_done"]
+        self.assertEqual(done[0][2], 3)
+        self.assertEqual((done[1][2], done[1][3]), (0, "empty"))
+        self.assertIn("duplicate", done[1][4])
+
+    def test_deleted_content_is_not_redownloaded_from_elsewhere(self):
+        tmp = tempfile.mkdtemp()
+        class Twin(FakeSource):
+            id, label = "twin", "Twin"
+
+            def fetch(self, *a, **k):
+                k["skip_ids"] = None            # a different site would use its own post ids
+                return super().fetch(*a, **k)
+        with mock.patch.dict(SOURCE_BY_ID, {"fake": FakeSource, "twin": Twin}):
+            col = Collection(tmp, "C")
+            ev = drain(Job(col, [Pick("fake", "a")], Options()))
+            item = [e for e in ev if e[0] == "item"][0][2]
+            col.reject(item.post_id, item.file_path)
+            col.save()
+            ev2 = drain(Job(Collection(tmp, "C"), [Pick("twin", "a")], Options()))
+        got = [e[2].post_id for e in ev2 if e[0] == "item"]
+        self.assertNotIn(item.post_id, got)

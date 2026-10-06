@@ -1,4 +1,4 @@
-# Media Collector  (v0.1.3)
+# Media Collector  (v0.1.4)
 
 Type a topic, tick the matches, press Start. The program asks each supported site for its own real
 subreddits, tags, communities and creators, downloads what you chose into a themed folder, and shows
@@ -34,6 +34,8 @@ reports; **Export log** saves it (API keys are never written to it).
 - **Collection** = a themed folder. It remembers what it has fetched, so running again only adds new items.
 - **Check all sites** (top right) runs one tiny search per site and shows which are live, empty or failing,
   with HTTP details. Run it first when a site seems down.
+- **Skip file** abandons the download in progress; **Stop** ends the run at once. **Settings** can skip files over a size.
+- **Duplicates** (byte-identical files, even from different sites) are removed automatically.
 - **Export ZIP** packs a collection.
 
 ## Sites

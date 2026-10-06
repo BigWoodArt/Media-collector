@@ -39,6 +39,11 @@ NOTICE = ("This tool collects media from public sites, several of which host adu
           "material involving minors (a built-in, non-removable filter).\n\nContinue?")
 
 
+def _size(n):
+    n = float(n or 0)
+    return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{n / 1024:.0f} KB"
+
+
 def status_text(p, running=False):
     if running:
         return "⏳ running"
@@ -121,8 +126,14 @@ class CollectorApp(tk.Tk):
         foot.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
         self.progress = ttk.Progressbar(foot, mode="determinate")
         self.progress.pack(fill="x", pady=(0, 6))
+        self.dl_row = ttk.Frame(foot)             # shown only while a big file is downloading
+        self.dl_bar = ttk.Progressbar(self.dl_row, mode="determinate")
+        self.dl_bar.pack(side="left", fill="x", expand=True)
+        self.dl_lbl = ttk.Label(self.dl_row, text="", style="Muted.TLabel")
+        self.dl_lbl.pack(side="left", padx=(8, 0))
         row = ttk.Frame(foot)
         row.pack(fill="x")
+        self._foot_row = row
         self.status = ttk.Label(row, text="Ready.", style="Muted.TLabel")
         self.status.pack(side="left")
         # red flashing dot + note while a site's own rate limit makes us wait (so it's clear it isn't the program)
@@ -135,6 +146,9 @@ class CollectorApp(tk.Tk):
         self.start_btn.pack(side="right")
         self.stop_btn = ttk.Button(row, text="Stop", command=self._stop, state="disabled")
         self.stop_btn.pack(side="right", padx=6)
+        self.skip_btn = tip(ttk.Button(row, text="Skip file", command=self._skip, state="disabled"),
+                            "Abandon the file that is downloading right now and carry on with the next one.")
+        self.skip_btn.pack(side="right")
 
         self.nb = ttk.Notebook(self)
         self.nb.pack(side="top", fill="both", expand=True, padx=12, pady=4)
@@ -828,7 +842,7 @@ class CollectorApp(tk.Tk):
                                 "or use the Add search box.", parent=self)
             return
         settings.save(self.cfg)
-        opts = Options(limit=self._limit(), types={"image", "video"})
+        opts = Options(limit=self._limit(), types={"image", "video"}, max_mb=int(self.cfg.get("max_file_mb") or 0))
         self._limits = {self._iid(p): (p.limit or SOURCE_BY_ID[p.source_id].default_limit) for p in picks}
         self._done_total = 0
         self.progress.config(value=0, maximum=max(1, sum(self._limits.values())))
@@ -839,6 +853,29 @@ class CollectorApp(tk.Tk):
         self._log(f"RUN {len(picks)} search(es)", "debug")
         self._running_iid = None
         self.job.start()
+
+    def _skip(self):
+        if self.job and self._busy():
+            self.job.skip_current()
+            self._log("skip requested for the current download", "debug")
+
+    def _show_dl(self, done, total, bps, url):
+        if not done and not total:
+            self.dl_row.pack_forget()
+            self.skip_btn.config(state="disabled")
+            return
+        if not self.dl_row.winfo_manager():
+            self.dl_row.pack(fill="x", pady=(0, 4), before=self._foot_row)
+        self.skip_btn.config(state="normal")
+        name = os.path.basename(url.split("?")[0]) or "file"
+        if total:
+            self.dl_bar.config(mode="determinate", maximum=total, value=done)
+            text = f"{name[:28]}  {_size(done)} of {_size(total)}  ·  {_size(bps)}/s"
+        else:
+            self.dl_bar.config(mode="indeterminate")
+            self.dl_bar.step(3)
+            text = f"{name[:28]}  {_size(done)}  ·  {_size(bps)}/s"
+        self.dl_lbl.config(text=text)
 
     def _stop(self):
         if self._check_stop is not None:
@@ -879,7 +916,7 @@ class CollectorApp(tk.Tk):
                 self.wait_lbl.pack(side="left", padx=(12, 0))
                 self.wait_dot.pack(side="left", padx=(8, 0), before=self.wait_lbl)
             self.wait_dot.itemconfig("dot", fill=theme.CRIMSON if self._wait_on else theme.BG)
-            self.wait_lbl.config(text=f"{self._wait_what}: waiting {left:.0f}s - not a program fault")
+            self.wait_lbl.config(text=f"{self._wait_what} - waiting {left:.0f}s")
         elif self.wait_dot.winfo_manager():
             self.wait_dot.pack_forget()
             self.wait_lbl.pack_forget()
@@ -896,6 +933,8 @@ class CollectorApp(tk.Tk):
             return
         if kind == "log":
             self._log(ev[1], ev[2])
+        elif kind == "dl":
+            self._show_dl(*ev[1:])
         elif kind == "progress":
             self._status(f"{ev[3]} ({ev[1]})")
             self._mark_running(ev[3])
@@ -912,6 +951,8 @@ class CollectorApp(tk.Tk):
         elif kind == "done":
             self.start_btn.config(state="normal")
             self.stop_btn.config(state="disabled")
+            self.skip_btn.config(state="disabled")
+            self.dl_row.pack_forget()
             self.progress.config(value=self.progress["maximum"])
             self._status(f"{'Stopped' if ev[2] else 'Finished'}: {ev[1]} new item(s).")
             self._log(f"RUN {'stopped' if ev[2] else 'finished'}: {ev[1]} new item(s)", "debug")
@@ -1040,6 +1081,13 @@ class SettingsDialog(tk.Toplevel):
         self.out_var = tk.StringVar(value=cfg["output_dir"])
         ttk.Entry(r, textvariable=self.out_var, width=40).pack(side="left")
         ttk.Button(r, text="Browse", command=self._browse).pack(side="left", padx=6)
+        r = ttk.Frame(body)
+        r.pack(fill="x", pady=4)
+        ttk.Label(r, text="Skip files over (MB)", width=22).pack(side="left")
+        self.max_var = tk.StringVar(value=str(cfg.get("max_file_mb") or 0))
+        ttk.Entry(r, textvariable=self.max_var, width=8).pack(side="left")
+        add_help(r, "Files bigger than this are skipped before they finish downloading. 0 = no limit. "
+                    "Handy for long videos.", side="left", padx=8)
         ttk.Label(body, text="Accounts and keys are all optional unless noted. Stored only in "
                              "collector_settings.json next to the program.", style="Muted.TLabel",
                   wraplength=560).pack(anchor="w", pady=(8, 2))
@@ -1065,6 +1113,10 @@ class SettingsDialog(tk.Toplevel):
 
     def _save(self):
         self.cfg["output_dir"] = self.out_var.get().strip() or self.cfg["output_dir"]
+        try:
+            self.cfg["max_file_mb"] = max(0, int(self.max_var.get().strip() or 0))
+        except ValueError:
+            self.cfg["max_file_mb"] = 0
         creds = dict(self.cfg.get("credentials") or {})      # keep fields for sites not shown (e.g. disabled ones)
         for (site, arg), var in self.vars.items():
             creds.setdefault(site, {})[arg] = var.get().strip()
