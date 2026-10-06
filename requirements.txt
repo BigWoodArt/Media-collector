@@ -1,0 +1,3 @@
+# Optional. Only Pillow is used (picture previews). Everything else is the Python standard library.
+Pillow
+# Also optional: ffmpeg (not a pip package) for video preview frames.

@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.tmp
+.deps_ok
+
+# your data
+app_settings.json
+session.json*
+projects/
+scraped/
+test_runs/
+output/*
+!output/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# your own presets stay private; only example_* ships
+templates/*.json
+!templates/example_*.json
+
+# Media Collector: your keys and downloads never go in git
+collector_settings.json
+collector_settings.json.tmp
+collections/
