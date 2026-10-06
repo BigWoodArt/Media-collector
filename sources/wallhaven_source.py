@@ -12,16 +12,21 @@ class WallhavenSource(JsonBoardSource):
     prefix = "wh_"
     page_size = 24
     min_interval = 1.0
-    has_sort, has_time = True, True
-    sort_options = ["relevance", "favorites", "views", "toplist", "random", "date_added"]
-    time_options = ["1d", "3d", "1w", "1M", "3M", "6M", "1y"]
-    default_sort = "relevance"
+    has_media_priority = False        # images only
+    order_choices = [
+        ("relevance", "Best match", {"sort": "relevance"}),
+        ("hot", "Hot", {"sort": "hot"}),
+        ("favorites", "Most favorited", {"sort": "favorites"}),
+        ("views", "Most viewed", {"sort": "views"}),
+        ("top_week", "Top this week", {"sort": "toplist", "time_range": "1w"}),
+        ("top_month", "Top this month", {"sort": "toplist", "time_range": "1M"}),
+        ("top_year", "Top this year", {"sort": "toplist", "time_range": "1y"}),
+        ("new", "Newest", {"sort": "date_added"}),
+        ("random", "Random", {"sort": "random"}),
+    ]
+    default_order = "relevance"
+    min_score_choices = []
     query_hint = "keywords or tags (e.g. cat girl)"
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        return {"Good": {"sort": "favorites", "time_range": "1y"},
-                "Best": {"sort": "toplist", "time_range": "1y"}}.get(quality, {})
 
     def _page(self, query, cursor):
         page = cursor or 1

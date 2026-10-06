@@ -1,7 +1,7 @@
 import base64
 import urllib.parse
 
-from sources.json_board import JsonBoardSource, ApiError
+from sources.json_board import JsonBoardSource, ApiError, score_choices
 
 
 class E621Source(JsonBoardSource):
@@ -12,7 +12,7 @@ class E621Source(JsonBoardSource):
     prefix = "e6_"
     page_size = 100
     min_interval = 0.6
-    quality_scores = {"Good": 50, "Best": 200}
+    min_score_choices = score_choices((25, 50, 100, 200, 500))      # e621 scores run high
     query_hint = "tags (e.g. cat solo)"
 
     def _headers(self):

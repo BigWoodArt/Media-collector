@@ -15,12 +15,10 @@ from sources.base import Source
 
 class FakeSource(Source):
     id, label, category = "fake", "Fake", "Test"
-    supports_quality = True
+    order_choices = [("a", "A", {"sort": "Top"}), ("b", "B", {"sort": "New"})]
+    default_order = "a"
+    min_score_choices = [("", "Any", {}), ("9", "9", {"query_suffix": "score:>=9"})]
     calls = []
-
-    @classmethod
-    def resolve_quality(cls, q):
-        return {"query_suffix": "score:>=9"} if q == "Best" else {}
 
     @classmethod
     def suggest(cls, query):
@@ -88,8 +86,8 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual([e for e in ev if e[0] == "item"], [])
         self.assertEqual([e for e in ev if e[0] == "pick_done"][0][3], "empty")
 
-    def test_quality_suffix_applied(self):
-        self.run_job([Pick("fake", "cat")], quality="Best")
+    def test_min_score_suffix_applied(self):
+        self.run_job([Pick("fake", "cat", min_score="9")])
         self.assertEqual(FakeSource.calls, ["cat score:>=9"])
 
     def test_one_broken_site_does_not_stop_the_rest(self):
@@ -151,20 +149,21 @@ if __name__ == "__main__":
 
 
 class PersistenceAndRanking(unittest.TestCase):
-    def test_saved_searches_round_trip_with_quality_and_limit(self):
+    def test_saved_searches_round_trip_with_all_fields(self):
         tmp = tempfile.mkdtemp()
         c = Collection(tmp, "Cats")
-        c.picks = [Pick("fake", "cat", "Fake cat", "Best", 25), Pick("fake", "dog")]
+        c.picks = [Pick("fake", "cat", "Fake cat", "b", "9", 25, "image", True, False, "done", 3), Pick("fake", "dog")]
         c.save()
         again = Collection(tmp, "Cats")
-        self.assertEqual([(p.value, p.quality, p.limit) for p in again.picks], [("cat", "Best", 25), ("dog", "", 0)])
+        self.assertEqual([(p.value, p.order, p.min_score, p.limit, p.types, p.randomize, p.status, p.kept) for p in again.picks],
+                         [("cat", "b", "9", 25, "image", True, "done", 3), ("dog", "", "", 0, "", False, "", 0)])
 
-    def test_per_search_quality_and_limit_win_over_defaults(self):
+    def test_per_search_options_win_over_defaults(self):
         tmp = tempfile.mkdtemp()
         FakeSource.calls = []
         with mock.patch.dict(SOURCE_BY_ID, {"fake": FakeSource}):
-            job = Job(Collection(tmp, "C"), [Pick("fake", "a", quality="Best"), Pick("fake", "b")],
-                      Options(quality="Any", limit=9))
+            job = Job(Collection(tmp, "C"), [Pick("fake", "a", min_score="9"), Pick("fake", "b")],
+                      Options(limit=9))
             drain(job)
         self.assertEqual(FakeSource.calls, ["a score:>=9", "b"])
 
@@ -197,3 +196,47 @@ class PersistenceAndRanking(unittest.TestCase):
         self.assertIn("START", text)
         self.assertIn("END status=", text)
         self.assertNotIn("SECRETKEY", text)
+
+
+class SiteCheckAndHelpers(unittest.TestCase):
+    def test_add_tokens_does_not_duplicate_a_kind(self):
+        from core.collector import add_tokens
+        self.assertEqual(add_tokens("cat", "sort:score score:>=9"), "cat sort:score score:>=9")
+        self.assertEqual(add_tokens("cat score:>=3", "score:>=9"), "cat score:>=3")
+
+    def test_per_pick_types_override_job_types(self):
+        tmp = tempfile.mkdtemp()
+        FakeSource.calls = []
+        with mock.patch.dict(SOURCE_BY_ID, {"fake": FakeSource}):
+            job = Job(Collection(tmp, "C"), [Pick("fake", "a", types="video")], Options(types={"image"}))
+            ev = drain(job)
+        kinds = {e[2].media_type for e in ev if e[0] == "item"}
+        self.assertEqual(kinds, {"video"})
+
+    def test_pick_status_saved_after_run(self):
+        tmp = tempfile.mkdtemp()
+        with mock.patch.dict(SOURCE_BY_ID, {"fake": FakeSource}):
+            col = Collection(tmp, "C")
+            p = Pick("fake", "a")
+            col.picks = [p]
+            drain(Job(col, [p], Options()))
+        again = Collection(tmp, "C")
+        self.assertEqual((again.picks[0].status, again.picks[0].kept), ("done", 3))
+
+    def test_check_sites_reports_ok_empty_and_fail(self):
+        import core.collector as cc
+        class Good(FakeSource):
+            id, label, check_query = "good", "Good", "q"
+        class Empty(FakeSource):
+            id, label, check_query = "empty", "Empty", "none"
+            def fetch(self, *a, **k):
+                return []
+        class Bad(FakeSource):
+            id, label, check_query = "bad", "Bad", "x"
+            def fetch(self, *a, **k):
+                raise RuntimeError("down")
+        with mock.patch.object(cc, "SOURCE_CLASSES", [Good, Empty, Bad]):
+            res, tmp = cc.check_sites()
+        got = {r["id"]: r["result"] for r in res}
+        self.assertEqual(got, {"good": "ok", "empty": "empty", "bad": "fail"})
+        self.assertIn("down", [r for r in res if r["id"] == "bad"][0]["detail"])

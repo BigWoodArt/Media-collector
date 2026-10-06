@@ -7,6 +7,6 @@ class GelbooruSource(BooruFamilySource):
     check_query = "cat_ears"
     base_url = "https://gelbooru.com"
     prefix = "gb_"
-    quality_scores = {"Good": 10, "Best": 50}
     api_key_helps = True
+    order_choices = BooruFamilySource.order_choices + [("random", "Random", {"query_suffix": "sort:random"})]
     api_policy = "key"        # anonymous dapi answers HTTP 401 (seen in real runs)

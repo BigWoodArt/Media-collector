@@ -1,4 +1,4 @@
-# Media Collector
+# Media Collector  (v0.1.2)
 
 Type a topic, tick the matches, press Start. The program asks each supported site for its own real
 subreddits, tags, communities and creators, downloads what you chose into a themed folder, and shows
@@ -15,12 +15,16 @@ a live preview where one click rejects anything you don't want.
 
 ## Using it
 Three columns:
-- **Left, Find.** Type a topic and press Find. Every site is asked for its own real matches (subreddits, Redgifs
-  tags, booru tags, Lemmy communities), shown in one list with the most popular first. An exact subreddit match
-  (`r/<topic>`) is checked directly and goes to the top. Select matches and press **Add →** (or double-click).
-  **Hide small** drops matches under 100. Sites with no search (e.g. Soundgasm creators) use **Add by name**.
-- **Centre, Searches to run.** Each added search with its source, **Quality** and **Limit**. Select rows and press
-  **Apply** to change them; new searches start with the values beside the button. A collection remembers its list.
+- **Left: Find, then Add search.** Type a topic and press **Find**. Every site is asked for its own real matches
+  (subreddits, Redgifs tags, booru tags, Lemmy communities), most popular first. An exact subreddit name
+  (`r/<topic>`) is checked directly and goes to the top. Select matches and press **Add →**. If a site gives no
+  answer, Find says which one (details in the Log).
+  The **Add search** box adapts to the chosen site: its own **Sort** choices, **Min score** (boorus), **Random**,
+  **Prioritize**, a default **Limit** and a query hint (pasted site URLs are cleaned up). Set **Limit** and **Type**
+  there too. Nothing needs applying: values are read when you press **Add →** (and by Find's **Add →**).
+- **Centre, Searches to run.** Columns: **Status** (● new, ⏳ running, ✓ done (n), ∅ empty, ✗ failed, ⏸ stopped),
+  **Site**, **Query**, **Sort**, **Limit**, **Options**. Double-click or **Edit** to change a search, **Re-run**
+  resets its status, right-click to open its folder. A collection remembers its list.
 - **Right, feed.** A large preview of the newest (or last clicked) download, and a strip of recent downloads.
   Click one to view it; **✕** deletes the file and it is never fetched again.
 
@@ -28,8 +32,9 @@ Three columns:
 reports; **Export log** saves it (API keys are never written to it).
 
 - **Collection** = a themed folder. It remembers what it has fetched, so running again only adds new items.
-- **Quality** Any / Good / Best is translated per site (minimum score, top of month/year, ...).
-- **Export ZIP** packs a collection. **Advanced** picks a site's own sort/time.
+- **Check all sites** (top right) runs one tiny search per site and shows which are live, empty or failing,
+  with HTTP details. Run it first when a site seems down.
+- **Export ZIP** packs a collection.
 
 ## Sites
 Reddit, Redgifs, Soundgasm, Freesound, Erome, Gelbooru, Realbooru, Hypnohub, Rule34, Safebooru, TBIB, Xbooru,

@@ -4,6 +4,7 @@ No UI imports, so it is fully testable."""
 import json
 import os
 import queue
+import tempfile
 import threading
 import time
 import traceback
@@ -13,9 +14,23 @@ from dataclasses import dataclass, field
 from core import netlog
 from core.thumbs import looks_like_error_page, make_thumb
 from core.util import safe_name
-from sources import SOURCE_BY_ID
+
+from concurrent.futures import ThreadPoolExecutor
+
+from sources import SOURCE_BY_ID, SOURCE_CLASSES
+from sources.base import Source
 
 MANIFEST = "collection.json"
+
+
+def add_tokens(query, suffix):
+    """Append each suffix token (sort:score, score:>=10) unless the query already has one of that kind."""
+    have = query.split()
+    for token in (suffix or "").split():
+        kind = token.split(":", 1)[0] + ":"
+        if not any(t.lstrip("-").startswith(kind) for t in have):
+            query += " " + token
+    return query
 
 
 @dataclass
@@ -23,21 +38,34 @@ class Pick:
     source_id: str
     value: str          # exactly what is typed into that site's search (tag, subreddit, creator, ...)
     label: str = ""     # display text
-    quality: str = ""   # Any / Good / Best; "" = the job's default
+    order: str = ""     # the site's own sort choice key ("" = site default)
+    min_score: str = ""  # boorus: minimum-score choice key ("" = none)
     limit: int = 0      # items to fetch; 0 = the job's default
+    types: str = ""     # comma list of image,video,audio; "" = the job's default
+    randomize: bool = False
+    prioritize: bool = False
+    status: str = ""    # last result: done / empty / failed / stopped ("" = never run)
+    kept: int = 0       # items kept in the last run
 
     def key(self):
         return (self.source_id, self.value.strip().lower())
 
+    def type_set(self):
+        return {t for t in self.types.split(",") if t}
+
     def to_dict(self):
-        return {"source": self.source_id, "value": self.value, "label": self.label,
-                "quality": self.quality, "limit": self.limit}
+        return {"source": self.source_id, "value": self.value, "label": self.label, "order": self.order,
+                "min_score": self.min_score, "limit": self.limit, "types": self.types,
+                "randomize": self.randomize, "prioritize": self.prioritize,
+                "status": self.status, "kept": self.kept}
 
     @classmethod
     def from_dict(cls, d):
         try:
-            return cls(str(d["source"]), str(d["value"]), str(d.get("label", "")),
-                       str(d.get("quality", "")), int(d.get("limit", 0) or 0))
+            return cls(str(d["source"]), str(d["value"]), str(d.get("label", "")), str(d.get("order", "")),
+                       str(d.get("min_score", "")), int(d.get("limit", 0) or 0), str(d.get("types", "")),
+                       bool(d.get("randomize")), bool(d.get("prioritize")), str(d.get("status", "")),
+                       int(d.get("kept", 0) or 0))
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -45,11 +73,7 @@ class Pick:
 @dataclass
 class Options:
     limit: int = 50
-    quality: str = "Good"                       # Any / Good / Best
-    types: set = field(default_factory=lambda: {"image", "video"})
-    randomize: bool = False
-    sort: str = ""                              # Advanced: site's own sort (blank = from quality)
-    time_range: str = ""
+    types: set = field(default_factory=lambda: {"image", "video"})   # used when a pick has no types of its own
 
 
 class Collection:
@@ -174,20 +198,17 @@ class Job:
             self._emit("pick_done", pick, 0, "failed", "unknown site")
             return
         opts = self.options
-        quality = pick.quality or opts.quality
-        limit = pick.limit or opts.limit
-        resolved = cls.resolve_quality(quality) if cls.supports_quality else {}
-        sort = (opts.sort or resolved.get("sort") or None) if cls.has_sort else None
-        time_range = (opts.time_range or resolved.get("time_range") or None) if cls.has_sort else None
-        query = pick.value
-        suffix = resolved.get("query_suffix")
-        if suffix and "score" not in query:
-            query = f"{query} {suffix}"
+        limit = pick.limit or opts.limit or cls.default_limit
+        types = pick.type_set() or opts.types
+        resolved = cls.resolve(pick.order, pick.min_score)
+        sort, time_range = resolved.get("sort"), resolved.get("time_range")
+        query = add_tokens(pick.value, resolved.get("query_suffix", ""))
         dest = os.path.join(self.collection.dir, safe_name(cls.label), safe_name(pick.value)[:40])
         os.makedirs(dest, exist_ok=True)
         creds = self.credentials.get(pick.source_id) or {}
-        self._emit("log", f"[{label}] START quality={quality} limit={limit} -> query={query!r} sort={sort} "
-                          f"time={time_range} shuffle={opts.randomize} types={sorted(opts.types)} "
+        self._emit("log", f"[{label}] START order={pick.order or cls.default_order!r} min_score={pick.min_score!r} limit={limit} -> "
+                          f"query={query!r} sort={sort} time={time_range} shuffle={pick.randomize} "
+                          f"prioritize={pick.prioritize} types={sorted(types)} "
                           f"credentials_set={sorted(creds)} dest={dest}", "debug")
         try:
             source = cls(**creds) if creds else cls()
@@ -211,7 +232,7 @@ class Job:
                 log_cb(f"discarded {os.path.basename(item.file_path)}: an error page, not a real file", "warning")
                 _rm(item.file_path)
                 return
-            if item.media_type not in opts.types:
+            if item.media_type not in types:
                 skipped["type"] += 1
                 self._emit("log", f"[{label}] dropped {item.post_id} ({item.media_type} not selected)", "debug")
                 _rm(item.file_path)
@@ -230,7 +251,7 @@ class Job:
         started = time.time()
         try:
             source.fetch(query, limit, sort, time_range, dest, log_cb, progress_cb,
-                         CombinedStop(self.stop_event), None, opts.randomize, False,
+                         CombinedStop(self.stop_event), None, pick.randomize, pick.prioritize,
                          item_cb=item_cb, skip_ids=self.collection.skip_ids())
         except Exception as ex:                     # a broken site must not stop the other picks
             status, detail = "failed", f"{type(ex).__name__}: {ex}"
@@ -255,6 +276,7 @@ class Job:
                 status, detail = "empty", "nothing new matched"
         self._emit("log", f"[{label}] END status={status} kept={len(kept)} skipped={skipped} "
                           f"http_calls={len(http)} seconds={time.time() - started:.1f}", "debug")
+        pick.status, pick.kept = status, len(kept)
         self.collection.save()
         self._emit("pick_done", pick, len(kept), status, detail)
 
@@ -266,7 +288,7 @@ def _rm(path):
         pass
 
 
-def suggest_all(query, source_ids=None, timeout=10.0, min_count=0, max_results=80):
+def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=80, report=None):
     """Ask every site that supports it for real matches. Returns the most popular first across ALL sites:
     [{"source": id, "site": label, "value", "label", "count"}]. Matches with a known size under min_count are
     dropped; matches with no known size go last. A slow or broken site just contributes nothing."""
@@ -275,10 +297,13 @@ def suggest_all(query, source_ids=None, timeout=10.0, min_count=0, max_results=8
 
     def one(sid):
         cls = SOURCE_BY_ID[sid]
+        t0 = time.time()
         try:
             found = cls.suggest(query) or []
         except Exception:
             found = []
+        if report and cls.suggest.__func__ is not Source.suggest.__func__:    # only sites that have a lookup
+            report(cls.label, len(found), round(time.time() - t0, 1))
         with lock:
             for m in found:
                 results.append({"source": sid, "site": cls.label, "value": m["value"],
@@ -298,5 +323,69 @@ def suggest_all(query, source_ids=None, timeout=10.0, min_count=0, max_results=8
         if r["count"] is not None and r["count"] < min_count:
             continue
         out.append(r)
-    out.sort(key=lambda r: (r["count"] is None, -(r["count"] or 0)))
+    names = {query.strip().lower().lstrip("#"), query.strip().lower().replace(" ", ""),
+             query.strip().lower().replace(" ", "_")}
+    out.sort(key=lambda r: (str(r["value"]).lower() not in names, r["count"] is None, -(r["count"] or 0)))
     return out[:max_results]
+
+
+def check_sites(credentials=None, on_result=None, stop_event=None, workers=6):
+    """One tiny harmless search (limit 1) per site: which sources answer right now?
+    Returns (results, temp_dir). Each result: {"id","label","result": ok|empty|fail|stopped, "elapsed",
+    "detail","http","item","thumb"}. on_result(result) is called from worker threads as each site finishes."""
+    credentials = credentials or {}
+    stop_event = stop_event or threading.Event()
+    root = tempfile.mkdtemp(prefix="mc_sitecheck_")
+    results = []
+
+    def one(cls):
+        res = {"id": cls.id, "label": cls.label, "query": cls.check_query, "result": "fail", "elapsed": 0.0,
+               "detail": "", "http": [], "item": None, "thumb": None}
+        if stop_event.is_set():
+            res["result"] = "stopped"
+            return res
+        dest = os.path.join(root, safe_name(cls.id))
+        os.makedirs(dest, exist_ok=True)
+        creds = credentials.get(cls.id) or {}
+        errors, items, http = [], [], []
+        started = time.time()
+        netlog.begin(http)
+        try:
+            source = cls(**creds) if creds else cls()
+            resolved = cls.resolve("", "")
+            source.fetch(add_tokens(cls.check_query, resolved.get("query_suffix", "")), 1,
+                         resolved.get("sort"), resolved.get("time_range"), dest,
+                         lambda m, lvl="info": errors.append(m) if lvl == "error" else None,
+                         lambda *a: None, CombinedStop(stop_event), None, False, False,
+                         item_cb=items.append, skip_ids=set())
+        except Exception as ex:
+            res["detail"] = f"{type(ex).__name__}: {ex}"
+        finally:
+            netlog.end()
+        res["elapsed"], res["http"] = round(time.time() - started, 1), http
+        good = [i for i in items if not looks_like_error_page(i.file_path)]
+        if good:
+            res["result"], res["item"] = "ok", good[0]
+            res["thumb"] = make_thumb(good[0].file_path, good[0].media_type)
+        elif stop_event.is_set():
+            res["result"] = "stopped"
+        elif res["detail"] or errors:
+            res["detail"] = res["detail"] or errors[-1]
+        else:
+            res["result"], res["detail"] = "empty", "answered, but nothing matched"
+        return res
+
+    def wrapped(cls):
+        r = one(cls)
+        results.append(r)
+        if on_result:
+            try:
+                on_result(r)
+            except Exception:
+                pass
+        return r
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(wrapped, SOURCE_CLASSES))
+    results.sort(key=lambda r: r["label"].lower())
+    return results, root

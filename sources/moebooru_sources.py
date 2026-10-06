@@ -1,12 +1,12 @@
 import urllib.parse
 
-from sources.json_board import JsonBoardSource
+from sources.json_board import JsonBoardSource, SCORE_ORDERS
 
 
 class MoebooruSource(JsonBoardSource):
     """Moebooru-engine boards: /post.json, page starts at 1, tags are a space-separated string."""
     page_size = 100
-    quality_scores = {"Good": 20, "Best": 100}
+    order_choices = SCORE_ORDERS
     query_hint = "tags (e.g. cat_ears solo)"
     check_query = "cat_ears"
 

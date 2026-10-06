@@ -27,7 +27,6 @@ class SoundgasmSource(Source):
     category = "Audio"
     label = "Soundgasm"
     query_hint = "paste Creator Name here"
-    has_sort = False
     default_limit = 5
     default_randomize = True   # no search here: newest-N every time would be dull
 

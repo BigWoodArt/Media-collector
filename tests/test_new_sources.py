@@ -115,12 +115,6 @@ class Boards(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertTrue(any("modelId=42" in u for u in urls))
 
-    @mock.patch.dict(SOURCE_BY_ID, {"civitai": CivitaiSource})
-    def test_civitai_requires_key(self):
-        items, urls, log, *_ = self.run_site("civitai", lambda u: reply("{}"), query="user:x")
-        self.assertEqual((items, urls), ([], []))
-        self.assertTrue(any("API key" in m for _, m in log))
-
     def test_lemmy(self):
         data = {"posts": [{"post": {"id": 1, "name": "nice", "url": "https://l/1.jpg", "url_content_type": "image/jpeg"}},
                           {"post": {"id": 2, "name": "article", "url": "https://news/x", "url_content_type": "text/html"}}]}

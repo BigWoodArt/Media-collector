@@ -32,10 +32,8 @@ class EromeSource(Source):
     category = "GIFs & Video"
     label = "Erome"
     query_hint = "keyword or tag (e.g. cosplay)"
-    has_sort = True
-    has_time = False
-    sort_options = ["Hot", "New"]
-    default_sort = "Hot"
+    order_choices = [("hot", "Hot", {"sort": "Hot"}), ("new", "New", {"sort": "New"})]
+    default_order = "hot"
     has_media_priority = True
 
     def __init__(self):

@@ -1,6 +1,7 @@
+import re
 import urllib.parse
 
-from sources.json_board import JsonBoardSource
+from sources.json_board import JsonBoardSource, score_choices
 
 
 class DerpibooruSource(JsonBoardSource):
@@ -11,18 +12,19 @@ class DerpibooruSource(JsonBoardSource):
     prefix = "dp_"
     page_size = 50
     EVERYTHING_FILTER = 56027      # verify with Check all sites; the site's "Everything" filter
-    quality_scores = {"Good": 100, "Best": 500}
+    order_choices = [("score", "Highest score", {"sort": "score"}), ("new", "Newest", {"sort": "created_at"}),
+                     ("random", "Random", {"sort": "random"})]
+    min_score_choices = score_choices((50, 100, 250, 500, 1000), "score.gte:{n}")
     query_hint = "tags, comma-separated (e.g. explicit, solo)"
 
-    @classmethod
-    def resolve_quality(cls, quality):
-        n = cls.quality_scores.get(quality)
-        return {"query_suffix": f"score.gte:{n}"} if n else {}
+    def _normalize_query(self, query):
+        return re.sub(r"\s+(score\.gte:\d+)", r", \1", query)      # Philomena wants commas between terms
 
     def _page(self, query, cursor):
         page = cursor or 1
         params = {"q": query or "*", "per_page": self.page_size, "page": page,
-                  "filter_id": self.EVERYTHING_FILTER, "sf": "score", "sd": "desc"}
+                  "filter_id": self.EVERYTHING_FILTER,
+                  "sf": getattr(self, "_sort", None) or "score", "sd": "desc"}
         if self.api_key:
             params["key"] = self.api_key
         data = self._get_json(f"{self.base_url}/api/v1/json/search/images?{urllib.parse.urlencode(params)}")

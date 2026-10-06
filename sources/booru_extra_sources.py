@@ -9,7 +9,6 @@ class Rule34Source(BooruFamilySource):
     site_url = "https://rule34.xxx"
     prefix = "r34_"
     api_policy = "key"        # anonymous API answers "Missing authentication"
-    quality_scores = {"Good": 20, "Best": 100}
     api_key_helps = True
 
 
@@ -18,7 +17,6 @@ class SafebooruSource(BooruFamilySource):
     check_query = "cat_ears"
     base_url = "https://safebooru.org"
     prefix = "sb_"
-    quality_scores = {"Good": 5, "Best": 20}
 
 
 class TbibSource(BooruFamilySource):
@@ -26,7 +24,6 @@ class TbibSource(BooruFamilySource):
     check_query = "cat_ears"
     base_url = "https://tbib.org"
     prefix = "tb_"
-    quality_scores = {"Good": 5, "Best": 20}
 
 
 class XbooruSource(BooruFamilySource):
@@ -34,4 +31,3 @@ class XbooruSource(BooruFamilySource):
     check_query = "cat_ears"
     base_url = "https://xbooru.com"
     prefix = "xb_"
-    quality_scores = {"Good": 5, "Best": 20}

@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.1.2"
 APP_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = APP_DIR / "collector_settings.json"
 
@@ -29,7 +29,6 @@ DEFAULTS = {
     "output_dir": str(APP_DIR / "collections"),
     "last_collection": "My collection",
     "limit": 50,
-    "quality": "Good",
     "types": ["image", "video"],
     "randomize": False,
     "credentials": {},      # {site id: {argument: value}}

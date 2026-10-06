@@ -4,26 +4,28 @@ from sources.json_board import JsonBoardSource, ApiError
 
 
 class CivitaiSource(JsonBoardSource):
-    """DISABLED (not in SOURCE_CLASSES): image search is down upstream, and search-by-name finds models, not tagged images.
-    Civitai public REST API (/api/v1/images). Query: 'user:NAME', 'model:ID', or a model name to search.
-    Mature content needs an API key. civitai.red serves mature content and needs a login API key."""
+    """Civitai public REST API (/api/v1/images). Query: 'user:NAME', 'model:ID', or a model name to search.
+    Mature content needs an API key. If NSFW lives on another host (e.g. a .red domain), change base_url."""
     id, label = "civitai", "Civitai"
     category = "AI art"
     check_query = "user:Civitai"
-    base_url = "https://civitai.red"   # the mature-content site; editable in Settings
+    base_url = "https://civitai.com"
     prefix = "cv_"
     page_size = 100
     min_interval = 1.5
-    has_sort, has_time = True, True
-    sort_options = ["Most Reactions", "Most Comments", "Newest"]
-    time_options = ["Day", "Week", "Month", "Year", "AllTime"]
-    default_sort = "Most Reactions"
+    order_choices = [
+        ("reactions_week", "Most reactions this week", {"sort": "Most Reactions", "time_range": "Week"}),
+        ("reactions_month", "Most reactions this month", {"sort": "Most Reactions", "time_range": "Month"}),
+        ("reactions_year", "Most reactions this year", {"sort": "Most Reactions", "time_range": "Year"}),
+        ("reactions_all", "Most reactions all time", {"sort": "Most Reactions", "time_range": "AllTime"}),
+        ("comments_month", "Most comments this month", {"sort": "Most Comments", "time_range": "Month"}),
+        ("new", "Newest", {"sort": "Newest"}),
+    ]
+    default_order = "reactions_month"
+    min_score_choices = []
     query_hint = "user:name, model:id, or model name"
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        return {"Good": {"sort": "Most Reactions", "time_range": "Month"},
-                "Best": {"sort": "Most Reactions", "time_range": "AllTime"}}.get(quality, {})
+    TIME_PERIODS = ("Day", "Week", "Month", "Year", "AllTime")
+    DEFAULT_SORT = "Most Reactions"
 
     def _headers(self):
         h = {"User-Agent": self.user_agent, "Accept": "application/json"}
@@ -44,14 +46,12 @@ class CivitaiSource(JsonBoardSource):
         return {"modelId": items[0]["id"]}
 
     def _page(self, query, cursor):
-        if not self.api_key:
-            raise ApiError("Civitai needs an API key - add one in Settings (Civitai account > API keys)")
         if not hasattr(self, "_target") or self._target_for != query:
             self._target, self._target_for = self._resolve_target(query), query
         params = dict(self._target, limit=self.page_size,
-                      sort=getattr(self, "_sort", None) or self.default_sort)
+                      sort=getattr(self, "_sort", None) or self.DEFAULT_SORT)
         period = getattr(self, "_time", None)
-        if period in self.time_options:
+        if period in self.TIME_PERIODS:
             params["period"] = period
         if cursor:
             params["cursor"] = cursor

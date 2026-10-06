@@ -7,4 +7,3 @@ class RealbooruSource(BooruFamilySource):
     base_url = "https://realbooru.com"
     prefix = "rb_"
     api_policy = "off"        # dapi answers "API offline ... shut off indefinitely"
-    quality_scores = {"Good": 5, "Best": 20}

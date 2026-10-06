@@ -41,8 +41,6 @@ class BadReply(ValueError):
 
 class BooruFamilySource(Source):
     category = "Image boards"
-    supports_quality = True
-    has_sort = False
     has_media_priority = True
     query_hint = "tags (e.g. cat_ears solo)"
 
@@ -50,7 +48,12 @@ class BooruFamilySource(Source):
     site_url = ""            # public site (Referer, rebuilt URLs); default base_url
     prefix = ""              # post_id prefix, unique per site
     page_size = 100
-    quality_scores = {"Good": 10, "Best": 50}   # min score per tier
+    order_choices = [("score", "Highest score", {"query_suffix": "sort:score"}), ("new", "Newest", {})]
+    default_order = "score"
+    min_score_choices = [("", "Any", {})] + [(str(n), f"{n}+", {"query_suffix": f"score:>={n}"})
+                                             for n in (5, 10, 25, 50, 100)]
+    order_help = ("Highest score sorts the whole site by score; Newest is the site's default. "
+                  "Min score also drops low-scored posts (score scales differ by site).")
     api_key_helps = False    # suggest an API key + user ID if all else fails
     html_fallback = True     # use the site's web pages when the API refuses
     # API use: auto (fall back to pages), key (needs key + user ID), off
@@ -68,11 +71,6 @@ class BooruFamilySource(Source):
             self._mode, self._why_html = "html", "its API is switched off"
         elif self.api_policy == "key" and not (api_key and user_id):
             self._mode, self._why_html = "html", "its API needs an API key + user ID (both) - none set"
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        n = cls.quality_scores.get(quality)
-        return {"query_suffix": f"score:>={n}"} if n else {}
 
     # ---- http
     def _wait(self):
@@ -155,7 +153,13 @@ class BooruFamilySource(Source):
             raise BadReply("blocked by a browser check (Cloudflare)", re.sub(r"\s+", " ", html[:160]))
         self._page_len = self._page_len or len(ids)
         self._html_offset += len(ids)
-        return [{"id": i, "_lazy": True} for i in ids]
+        return [{"id": i, "_lazy": True, "tags": self._list_tags(html, i)} for i in ids]
+
+    @staticmethod
+    def _list_tags(html, post_id):
+        """The tag text of one thumbnail on a list page (its title and alt together), or ''."""
+        m = re.search(r'id="p%s"[^>]*>(.{0,800}?)</a>' % re.escape(str(post_id)), html, re.S)
+        return " ".join(re.findall(r'(?:title|alt)="([^"]*)"', m.group(1))) if m else ""
 
     def _html_file(self, post_id):
         """Post page -> original file URL (None if the page has none)."""

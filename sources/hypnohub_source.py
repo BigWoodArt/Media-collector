@@ -7,5 +7,4 @@ class HypnohubSource(BooruFamilySource):
     check_query = "spiral"
     base_url = "https://hypnohub.net"
     prefix = "hh_"
-    quality_scores = {"Good": 5, "Best": 20}
     query_hint = "tags (e.g. spiral)"

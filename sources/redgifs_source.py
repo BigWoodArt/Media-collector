@@ -35,18 +35,39 @@ class RedgifsSource(Source):
     priority_media = "video"      # results are mostly videos - Prioritize keeps stills rare
     default_prioritize = True
     category = "GIFs & Video"
-    supports_quality = True
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        return {"Any": {"sort": "Score"}, "Good": {"sort": "Top 28 days"},
-                "Best": {"sort": "Top"}}.get(quality, {})
+    order_choices = [
+        ("score", "Best match", {"sort": "Score"}),
+        ("trending", "Trending", {"sort": "Trending"}),
+        ("latest", "Latest", {"sort": "Latest"}),
+        ("top_week", "Top this week", {"sort": "Top 7 days"}),
+        ("top_month", "Top this month", {"sort": "Top 28 days"}),
+        ("top_all", "Top all time", {"sort": "Top"}),
+    ]
+    default_order = "score"
+    order_help = "Best match is what redgifs.com's own search uses. 'Top this month' is the API's top-28-days list."
     label = "Redgifs"
     query_hint = "a Redgifs tag (e.g. Hypno)"
-    has_sort = True
-    has_time = False
-    sort_options = ["Score", "Trending", "Latest", "Top", "Top 7 days", "Top 28 days"]
-    default_sort = "Score"
+
+    @classmethod
+    def suggest(cls, query):
+        """Redgifs' own tag names for a word, with how many clips carry each."""
+        q = query.strip().lstrip("#")
+        if not q:
+            return []
+        try:
+            inst = cls()
+            token = inst._get_token(lambda *a, **k: None)
+            if not token:
+                return []
+            raw = inst._get_text("https://api.redgifs.com/v2/search/suggest?" + urllib.parse.urlencode({"query": q}),
+                                 extra_headers={"Authorization": f"Bearer {token}"})
+            data = json.loads(raw)
+        except Exception:
+            return []
+        if isinstance(data, dict):
+            data = next((v for v in data.values() if isinstance(v, list)), [])
+        return [{"value": d["text"], "label": f"Redgifs {d['text']}", "count": d.get("gifs")}
+                for d in data if isinstance(d, dict) and d.get("text")]
 
     def __init__(self):
         self._last_request = 0.0
@@ -87,27 +108,6 @@ class RedgifsSource(Source):
         except Exception as ex:
             log(f"[Redgifs] failed to get guest token: {ex}", "error")
         return self._token
-
-    @classmethod
-    def suggest(cls, query):
-        """Redgifs' own tag names for a word, with how many clips carry each (the same lookup the scraper uses)."""
-        q = query.strip().lstrip("#")
-        if not q:
-            return []
-        try:
-            inst = cls()
-            token = inst._get_token(lambda *a, **k: None)
-            if not token:
-                return []
-            raw = inst._get_text("https://api.redgifs.com/v2/search/suggest?" + urllib.parse.urlencode({"query": q}),
-                                 extra_headers={"Authorization": f"Bearer {token}"})
-            data = json.loads(raw)
-        except Exception:
-            return []
-        if isinstance(data, dict):
-            data = next((v for v in data.values() if isinstance(v, list)), [])
-        return [{"value": d["text"], "label": f"Redgifs {d['text']}", "count": d.get("gifs")}
-                for d in data if isinstance(d, dict) and d.get("text")]
 
     # ---- keyword -> Redgifs' own tag names
     def _resolve_tags(self, text, token, log):

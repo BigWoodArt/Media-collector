@@ -1,6 +1,6 @@
 """Main window, three columns:
-  left   - Find (real matches, most popular first) and Add by name; Add moves a pick to the centre
-  centre - the searches to run (tag, source, quality, limit)
+  left   - Find (real matches, most popular first) and the Add box, which adapts to the chosen site
+  centre - the searches to run (status, site, query, sort, limit, options)
   right  - big preview of the latest/clicked download, and a strip of recent downloads (X deletes one)
 The footer (progress, Stop, Start) is packed first so it can never be pushed out of view; Log is its own tab."""
 import datetime
@@ -15,10 +15,12 @@ from tkinter import ttk, filedialog, messagebox
 import theme
 from core import collector, settings
 from core.collector import Collection, Job, Options, Pick
+from core.query_clean import clean_query
 from core.thumbs import make_thumb
-from core.util import open_path
+from core.util import open_path, safe_name
 from sources import SOURCE_CLASSES, SOURCE_BY_ID
 from ui import tiles
+from ui.test_results import TestResultsWindow
 from ui.tooltip import add_help, tip
 
 try:
@@ -27,7 +29,6 @@ try:
 except ImportError:
     HAVE_PIL = False
 
-QUALITIES = ("Any", "Good", "Best")
 TYPES = (("image", "Images"), ("video", "Videos"), ("audio", "Audio"))
 MIN_MATCH_SIZE = 100          # "Hide small matches" floor
 STRIP_THUMB, STRIP_GAP, STRIP_MAX = 72, 6, 300
@@ -36,6 +37,19 @@ NOTICE = ("This tool collects media from public sites, several of which host adu
           "It is unofficial and for personal use. You are responsible for following each site's rules and "
           "your local laws. Requests are paced, it never bypasses logins or paywalls, and it never collects "
           "material involving minors (a built-in, non-removable filter).\n\nContinue?")
+
+
+def status_text(p, running=False):
+    if running:
+        return "⏳ running"
+    return {"": "● new", "done": f"✓ done ({p.kept})", "empty": "∅ empty - retry", "failed": "✗ failed - retry",
+            "stopped": "⏸ stopped"}.get(p.status, p.status)
+
+
+def status_tag(p, running=False):
+    if running:
+        return "run"
+    return {"done": "ok", "empty": "bad", "failed": "bad", "stopped": "bad"}.get(p.status, "")
 
 
 def short(n):
@@ -51,7 +65,7 @@ def short(n):
 class CollectorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Media Collector")
+        self.title(f"Media Collector v{settings.APP_VERSION}")
         self.geometry("1320x820")
         self.minsize(1080, 600)
         self.configure(bg=theme.BG)
@@ -59,6 +73,9 @@ class CollectorApp(tk.Tk):
         ttk.Style().configure("TSpinbox", fieldbackground=theme.PANEL_BG, foreground=theme.TEXT_FG,
                               background=theme.PANEL_BG, arrowcolor=theme.CRIMSON, insertcolor=theme.TEXT_FG)
         self.cfg = settings.load()
+        self._running_iid = None
+        self._limits = {}
+        self._done_total = 0
         self.rows = {}                 # tree iid -> Pick (the searches to run)
         self.matches = []              # last Find results (unfiltered)
         self.recent = []               # newest first: {"item","pick","pil","photo"}
@@ -68,10 +85,12 @@ class CollectorApp(tk.Tk):
         self.collection = None
         self._suggest_token = 0
         self._suggest_q = queue.Queue()
+        self._check_q = queue.Queue()
+        self._check_stop = None
         self._big_photo = None
         self._resize_job = None
         self._build()
-        self._log(f"Media Collector {settings.APP_VERSION} started", "debug")
+        self._log(f"Media Collector v{settings.APP_VERSION} started", "debug")
         self._load_collection(self.cfg.get("last_collection") or "My collection")
         self.after(100, self._poll)
         self.after(300, self._first_run_notice)
@@ -88,6 +107,9 @@ class CollectorApp(tk.Tk):
         self.col_box.bind("<Return>", lambda e: self._load_collection(self.col_var.get()))
         tip(self.col_box, "A collection is a themed folder that remembers its searches and what it has fetched. "
                           "Pick one, or type a new name and press Enter.")
+        self.check_btn = tip(ttk.Button(top, text="Check all sites", command=self._check_sites),
+                             "One tiny search per site: shows which sources are live right now.")
+        self.check_btn.pack(side="right", padx=(6, 0))
         for text, cmd, hint in (("Settings", self._settings, "Collections folder and site accounts/keys."),
                                 ("Export ZIP", self._export_zip, "Zip the collection's media."),
                                 ("Open folder", self._open_folder, "Show this collection's files.")):
@@ -117,9 +139,9 @@ class CollectorApp(tk.Tk):
         pane = tk.PanedWindow(collect, orient="horizontal", bg=theme.BG, sashwidth=6, bd=0, sashrelief="flat")
         pane.pack(fill="both", expand=True, pady=(6, 0))
         left, centre, right = ttk.Frame(pane), ttk.Frame(pane), ttk.Frame(pane)
-        pane.add(left, minsize=250, width=290, stretch="never")
-        pane.add(centre, minsize=380, stretch="always")
-        pane.add(right, minsize=300, width=400, stretch="never")
+        pane.add(left, minsize=290, width=330, stretch="never")
+        pane.add(centre, minsize=420, stretch="always")
+        pane.add(right, minsize=240, width=330, stretch="never")
         self._build_left(left)
         self._build_centre(centre)
         self._build_right(right)
@@ -127,24 +149,10 @@ class CollectorApp(tk.Tk):
 
     # ---------------------------------------------------------------- left: find + add by name
     def _build_left(self, f):
-        # lower controls are packed first (side=bottom) so a short window shrinks the list, not these
-        nb = ttk.LabelFrame(f, text="Add by name")
+        # the Add box is packed first (side=bottom) so a short window shrinks the Find list, not the form
+        nb = ttk.LabelFrame(f, text=" Add search ")
         nb.pack(side="bottom", fill="x", pady=(6, 0))
-        self.add_site = tk.StringVar(value=SOURCE_CLASSES[0].label)
-        cb = ttk.Combobox(nb, textvariable=self.add_site, state="readonly",
-                          values=[c.label for c in SOURCE_CLASSES])
-        cb.pack(fill="x", padx=6, pady=(6, 2))
-        cb.bind("<<ComboboxSelected>>", lambda e: self._sync_add_hint())
-        rr = ttk.Frame(nb)
-        rr.pack(fill="x", padx=6, pady=2)
-        self.add_var = tk.StringVar()
-        ent = ttk.Entry(rr, textvariable=self.add_var)
-        ent.pack(side="left", fill="x", expand=True)
-        ent.bind("<Return>", lambda e: self._add_named())
-        ttk.Button(rr, text="Add  →", command=self._add_named).pack(side="left", padx=(6, 0))
-        self.add_hint = ttk.Label(nb, text="", style="Muted.TLabel", wraplength=260)
-        self.add_hint.pack(anchor="w", padx=6, pady=(0, 6))
-        self._sync_add_hint()
+        self._build_add_form(nb)
 
         bar = ttk.Frame(f)
         bar.pack(side="bottom", fill="x", pady=4)
@@ -162,17 +170,18 @@ class CollectorApp(tk.Tk):
         self.query_entry.bind("<Return>", lambda e: self._find())
         ttk.Button(r, text="Find", command=self._find).pack(side="left", padx=(6, 0))
         add_help(r, "Asks every site for its own real matches (subreddits, tags, communities), most popular "
-                    "first. Select one or more and press Add.", side="left", padx=4)
-        self.find_status = ttk.Label(f, text="Type a topic and press Find.", style="Muted.TLabel", wraplength=270)
+                    "first. Select one or more and press Add →. They use the Limit and Type values below.",
+                 side="left", padx=4)
+        self.find_status = ttk.Label(f, text="Type a topic and press Find.", style="Muted.TLabel", wraplength=300)
         self.find_status.pack(anchor="w", pady=(0, 4))
 
         box = ttk.Frame(f)
         box.pack(fill="both", expand=True)
         self.match_tree = ttk.Treeview(box, columns=("name", "size"), show="headings", selectmode="extended",
-                                       height=4)
+                                       height=3)
         self.match_tree.heading("name", text="Match")
         self.match_tree.heading("size", text="Size")
-        self.match_tree.column("name", width=170, minwidth=80, stretch=True)
+        self.match_tree.column("name", width=200, minwidth=80, stretch=True)
         self.match_tree.column("size", width=56, minwidth=40, stretch=False, anchor="e")
         sb = ttk.Scrollbar(box, orient="vertical", command=self.match_tree.yview)
         self.match_tree.configure(yscrollcommand=sb.set)
@@ -181,75 +190,190 @@ class CollectorApp(tk.Tk):
         self.match_tree.bind("<Double-1>", lambda e: self._add_matches())
         self.match_tree.bind("<Return>", lambda e: self._add_matches())
 
-    # ---------------------------------------------------------------- centre: searches
-    def _build_centre(self, f):
-        # bottom controls first, so a short window shrinks the table, not the buttons
-        self.adv = ttk.Frame(f)
-        self.adv.pack(side="bottom", fill="x")
-        self.sort_var, self.time_var = tk.StringVar(), tk.StringVar()
-        adv_row = ttk.Frame(self.adv)
-        ttk.Label(adv_row, text="Sort").pack(side="left")
-        ttk.Combobox(adv_row, textvariable=self.sort_var, width=14, state="readonly",
-                     values=[""] + sorted({o for c in SOURCE_CLASSES for o in c.sort_options})).pack(side="left", padx=4)
-        ttk.Label(adv_row, text="Time").pack(side="left", padx=(8, 0))
-        ttk.Combobox(adv_row, textvariable=self.time_var, width=8, state="readonly",
-                     values=[""] + sorted({o for c in SOURCE_CLASSES for o in c.time_options})).pack(side="left", padx=4)
-        ttk.Label(adv_row, text="blank = from Quality", style="Muted.TLabel").pack(side="left", padx=6)
-        self._adv_row = adv_row
+    def _build_add_form(self, nb):
+        """Site-adaptive: Sort choices, Min score, Random/Prioritize and the default Limit follow the site."""
+        self.edit_iid = None
+        self._ph = False
+        self._last_default_limit = ""
+        r1 = ttk.Frame(nb)
+        r1.pack(fill="x", padx=6, pady=(6, 2))
+        self.add_site = tk.StringVar(value=SOURCE_CLASSES[0].label)
+        cb = ttk.Combobox(r1, textvariable=self.add_site, state="readonly", values=[c.label for c in SOURCE_CLASSES])
+        cb.pack(fill="x")
+        cb.bind("<<ComboboxSelected>>", lambda e: self._on_site_change())
+        self.add_entry = ttk.Entry(nb)
+        self.add_entry.pack(fill="x", padx=6, pady=2)
+        self.add_entry.bind("<FocusIn>", self._q_focus_in)
+        self.add_entry.bind("<FocusOut>", self._q_focus_out)
+        self.add_entry.bind("<<Paste>>", lambda e: self.after_idle(self._q_clean))
+        self.add_entry.bind("<Return>", lambda e: self._submit())
 
-        op = ttk.Frame(f)
-        op.pack(side="bottom", fill="x", pady=(6, 0))
-        ttk.Label(op, text="Type").pack(side="left")
+        r2 = ttk.Frame(nb)
+        r2.pack(fill="x", padx=6, pady=2)
+        ttk.Label(r2, text="Sort").pack(side="left")
+        self.order_cb = ttk.Combobox(r2, state="readonly", width=16)
+        self.order_cb.pack(side="left", padx=(4, 2), fill="x", expand=True)
+        self.order_help = add_help(r2, "", side="left", padx=(0, 2))
+        self.min_frame = ttk.Frame(nb)           # only for sites with a minimum-score choice (boorus)
+        ttk.Label(self.min_frame, text="Min score").pack(side="left")
+        self.min_cb = ttk.Combobox(self.min_frame, state="readonly", width=8)
+        self.min_cb.pack(side="left", padx=4)
+
+        self.r3 = ttk.Frame(nb)
+        self.r3.pack(fill="x", padx=6, pady=2)
+        ttk.Label(self.r3, text="Limit").pack(side="left")
+        self.limit_var = tk.StringVar(value="")      # follows each site's default until you change it
+        ttk.Spinbox(self.r3, from_=1, to=2000, width=5, textvariable=self.limit_var).pack(side="left", padx=(4, 8))
+        self.r3b = ttk.Frame(nb)
+        self.r3b.pack(fill="x", padx=6, pady=2)
+        ttk.Label(self.r3b, text="Type").pack(side="left")
         self.type_vars = {}
         for key, text in TYPES:
             v = tk.BooleanVar(value=key in self.cfg.get("types", ["image", "video"]))
             self.type_vars[key] = v
-            theme.make_checkbutton(op, text, v).pack(side="left", padx=3)
-        self.random_var = tk.BooleanVar(value=bool(self.cfg.get("randomize")))
-        theme.make_checkbutton(op, "Shuffle", self.random_var).pack(side="left", padx=(10, 0))
-        self.adv_var = tk.BooleanVar(value=False)
+            theme.make_checkbutton(self.r3b, text, v).pack(side="left", padx=(6, 0))
 
-        ed2 = ttk.Frame(f)
-        ed2.pack(side="bottom", fill="x", pady=(2, 0))
-        ttk.Button(ed2, text="Remove selected", command=self._remove_selected).pack(side="left")
-        ttk.Button(ed2, text="Clear all", style="Plus.TButton", command=self._clear_rows).pack(side="left", padx=6)
-        theme.make_checkbutton(ed2, "Advanced", self.adv_var, command=self._toggle_adv).pack(side="right")
+        self.r4 = ttk.Frame(nb)
+        self.r4.pack(fill="x", padx=6, pady=2)
+        self.random_var = tk.BooleanVar(value=False)
+        self.random_check = theme.make_checkbutton(self.r4, "Random", self.random_var)
+        self.random_check.pack(side="left")
+        self.prio_var = tk.BooleanVar(value=False)
+        self.prio_check = theme.make_checkbutton(self.r4, "Prioritize images", self.prio_var)
 
+        r5 = ttk.Frame(nb)
+        r5.pack(fill="x", padx=6, pady=(4, 2))
+        self.submit_btn = ttk.Button(r5, text="Add  →", command=self._submit)
+        self.submit_btn.pack(side="left")
+        self.cancel_btn = ttk.Button(r5, text="Cancel edit", style="Plus.TButton", command=self._cancel_edit)
+        self.add_hint = ttk.Label(nb, text="", style="Muted.TLabel", wraplength=300)
+        self.add_hint.pack(anchor="w", padx=6, pady=(0, 6))
+        self._on_site_change()
+
+    # ---- form helpers
+    def _cls(self):
+        return next((c for c in SOURCE_CLASSES if c.label == self.add_site.get()), SOURCE_CLASSES[0])
+
+    @staticmethod
+    def _key(label, choices):
+        return next((k for k, lab, _ in choices if lab == label), "")
+
+    @staticmethod
+    def _label(key, choices):
+        return next((lab for k, lab, _ in choices if k == key), choices[0][1] if choices else "-")
+
+    def _on_site_change(self):
+        cls = self._cls()
+        if self._ph or not self.add_entry.get().strip():
+            self._ph = False
+            self.add_entry.delete(0, "end")
+            self._apply_placeholder()
+        self.order_cb["values"] = [lab for _, lab, _ in cls.order_choices]
+        if cls.order_choices:
+            self.order_cb.config(state="readonly")
+            self.order_cb.set(self._label(cls.default_order, cls.order_choices))
+        else:
+            self.order_cb.config(state="disabled")
+            self.order_cb.set("-")
+        self.order_help.tooltip.text = cls.order_help
+        self.min_frame.pack_forget()
+        if cls.min_score_choices:
+            self.min_frame.pack(fill="x", padx=6, pady=2, before=self.r3)
+            self.min_cb["values"] = [lab for _, lab, _ in cls.min_score_choices]
+            self.min_cb.set(self._label("", cls.min_score_choices))
+        self.prio_check.pack_forget()
+        if cls.has_media_priority:
+            self.prio_check.pack(side="left", padx=(8, 0))
+        self.random_var.set(bool(getattr(cls, "default_randomize", False)))
+        self.prio_check.config(text=f"Prioritize {cls.priority_media}s")
+        self.prio_var.set(bool(cls.default_prioritize))
+        default = str(cls.default_limit)
+        if self.limit_var.get().strip() in ("", self._last_default_limit):
+            self.limit_var.set(default)
+        self._last_default_limit = default
+        self.add_hint.config(text=f"{cls.label}: {cls.query_hint}")
+
+    def _apply_placeholder(self):
+        if not self.add_entry.get().strip():
+            self.add_entry.insert(0, self._cls().query_hint)
+            self.add_entry.configure(style="Placeholder.TEntry")
+            self._ph = True
+
+    def _q_focus_in(self, _=None):
+        if self._ph:
+            self.add_entry.delete(0, "end")
+            self.add_entry.configure(style="TEntry")
+            self._ph = False
+
+    def _q_focus_out(self, _=None):
+        self._q_clean()
+        if not self.add_entry.get().strip():
+            self._apply_placeholder()
+
+    def _q_clean(self):
+        if self._ph:
+            return
+        text = self.add_entry.get()
+        cleaned = clean_query(self._cls().id, text)
+        if cleaned != text.strip():
+            self.add_entry.delete(0, "end")
+            self.add_entry.insert(0, cleaned)
+
+    def _set_query(self, text):
+        self._ph = False
+        self.add_entry.configure(style="TEntry")
+        self.add_entry.delete(0, "end")
+        self.add_entry.insert(0, text)
+
+    def _limit(self):
+        try:
+            return max(1, int(self.limit_var.get()))
+        except (tk.TclError, ValueError):
+            return self._cls().default_limit
+
+    def _types(self):
+        return ",".join(k for k, _ in TYPES if self.type_vars[k].get())
+
+    # ---------------------------------------------------------------- centre: searches
+    def _build_centre(self, f):
+        # bottom controls first, so a short window shrinks the table, not the buttons
+        self.count_lbl = ttk.Label(f, text="", style="Muted.TLabel", wraplength=560)
+        self.count_lbl.pack(side="bottom", anchor="w")
         ed = ttk.Frame(f)
         ed.pack(side="bottom", fill="x", pady=(4, 2))
-        ttk.Label(ed, text="Quality").pack(side="left")
-        self.quality_var = tk.StringVar(value=self.cfg.get("quality", "Good"))
-        ttk.Combobox(ed, textvariable=self.quality_var, values=QUALITIES, state="readonly",
-                     width=7).pack(side="left", padx=(4, 10))
-        ttk.Label(ed, text="Limit").pack(side="left")
-        self.limit_var = tk.IntVar(value=int(self.cfg.get("limit", 50)))
-        ttk.Spinbox(ed, from_=1, to=2000, width=6, textvariable=self.limit_var).pack(side="left", padx=(4, 10))
-        tip(ttk.Button(ed, text="Apply", command=self._apply_selected),
-            "Apply: sets Quality and Limit on the selected searches in the list. New searches you add start with these values."
-            ).pack(side="left")
-        add_help(ed, "Any = everything. Good / Best = better-rated posts; each site translates it its own way "
-                     "(minimum score, top of the month/year, ...).", side="left", padx=6)
-
-        self.count_lbl = ttk.Label(f, text="", style="Muted.TLabel", wraplength=440)
-        self.count_lbl.pack(side="bottom", anchor="w")
+        for text, cmd, style in (("Edit", self._edit_selected, None), ("Remove", self._remove_selected, "Plus.TButton"),
+                                 ("Clear all", self._clear_rows, "Plus.TButton"), ("Re-run", self._rerun_selected, "Plus.TButton")):
+            b = ttk.Button(ed, text=text, command=cmd, **({"style": style} if style else {}))
+            b.pack(side="left", padx=(0, 6))
 
         ttk.Label(f, text="Searches to run", font=theme.FONT_LABELFRAME,
                   foreground=theme.LIGHT_VIOLET).pack(anchor="w")
         box = ttk.Frame(f)
         box.pack(fill="both", expand=True, pady=(2, 4))
-        self.tree = ttk.Treeview(box, columns=("tag", "source", "quality", "limit"), show="headings",
-                                 selectmode="extended", height=4)
-        for col, text, w, mw, anchor, stretch in (("tag", "Tag / name", 150, 80, "w", True),
-                                                  ("source", "Source", 90, 60, "w", False),
-                                                  ("quality", "Quality", 64, 50, "center", False),
-                                                  ("limit", "Limit", 50, 40, "e", False)):
-            self.tree.heading(col, text=text)
-            self.tree.column(col, width=w, minwidth=mw, anchor=anchor, stretch=stretch)
+        cols = (("status", "Status", 100, 70, False), ("site", "Site", 70, 50, False),
+                ("query", "Query", 110, 60, True), ("sort", "Sort", 120, 60, False),
+                ("limit", "Limit", 40, 32, False), ("opts", "Options", 80, 40, False))
+        self.tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings", selectmode="extended", height=4)
+        for key, title, w, mw, stretch in cols:
+            self.tree.heading(key, text=title)
+            self.tree.column(key, width=w, minwidth=mw, anchor="e" if key == "limit" else "w", stretch=stretch)
         sb = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.tag_configure("ok", foreground=theme.LIGHT_VIOLET)
+        self.tree.tag_configure("bad", foreground="#ff6b81")
+        self.tree.tag_configure("run", foreground="#e0b84a")
         self.tree.bind("<Delete>", lambda e: self._remove_selected())
+        self.tree.bind("<Double-1>", lambda e: self._edit_selected())
+        self.tree.bind("<Button-3>", self._context_menu)
+        self.menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_BG, fg=theme.TEXT_FG,
+                            activebackground=theme.VIOLET, activeforeground=theme.BTN_FG)
+        self.menu.add_command(label="Edit", command=self._edit_selected)
+        self.menu.add_command(label="Re-run", command=self._rerun_selected)
+        self.menu.add_command(label="Open folder", command=self._open_pick_folder)
+        self.menu.add_separator()
+        self.menu.add_command(label="Remove", command=self._remove_selected)
 
     # ---------------------------------------------------------------- right: preview + recent strip
     def _build_right(self, f):
@@ -318,7 +442,7 @@ class CollectorApp(tk.Tk):
         if not dest:
             return
         creds = sorted(f"{s}.{k}" for s, d in settings.credentials_for(self.cfg).items() for k in d)
-        head = [f"Media Collector {settings.APP_VERSION}",
+        head = [f"Media Collector v{settings.APP_VERSION}",
                 f"Python {sys.version.split()[0]} on {platform.platform()}",
                 f"Pillow: {'yes' if HAVE_PIL else 'NO'}   ffmpeg: {'yes' if _ffmpeg() else 'no'}",
                 f"Collection: {self.collection.name}   searches: {len(self.rows)}",
@@ -334,16 +458,6 @@ class CollectorApp(tk.Tk):
     # ================================================================ small helpers
     def _status(self, text):
         self.status.config(text=text)
-
-    def _toggle_adv(self):
-        if self.adv_var.get():
-            self._adv_row.pack(fill="x", pady=(4, 0))
-        else:
-            self._adv_row.pack_forget()
-
-    def _sync_add_hint(self):
-        cls = next((c for c in SOURCE_CLASSES if c.label == self.add_site.get()), None)
-        self.add_hint.config(text=(cls.query_hint if cls else ""))
 
     def _first_run_notice(self):
         if self.cfg.get("accepted_notice"):
@@ -430,11 +544,14 @@ class CollectorApp(tk.Tk):
         self.find_status.config(text=f"Asking {len(SOURCE_CLASSES)} sites for matches to '{q}'...")
         self._log(f"find '{q}' (asking {len(SOURCE_CLASSES)} sites)", "debug")
 
+        reports = []
+
         def work():
-            self._suggest_q.put((token, q, collector.suggest_all(q)))
+            found = collector.suggest_all(q, report=lambda site, n, secs: reports.append((site, n, secs)))
+            self._suggest_q.put((token, q, found, reports))
         threading.Thread(target=work, daemon=True).start()
 
-    def _show_matches(self, token, q, found):
+    def _show_matches(self, token, q, found, reports=()):
         if token != self._suggest_token:
             return
         self.matches = found
@@ -443,6 +560,9 @@ class CollectorApp(tk.Tk):
             per[m["site"]] = per.get(m["site"], 0) + 1
         self._log(f"find '{q}': {len(found)} match(es): " + ", ".join(f"{k}={v}" for k, v in sorted(per.items())),
                   "debug")
+        for site, n, secs in sorted(reports):
+            self._log(f"find '{q}': {site} lookup -> {n} result(s) in {secs}s", "debug")
+        self._silent = sorted(site for site, n, _ in reports if n == 0)
         self._render_matches()
 
     def _render_matches(self):
@@ -454,72 +574,190 @@ class CollectorApp(tk.Tk):
             self.match_tree.insert("", "end", iid=str(i), values=(m["label"], short(m["count"])))
             shown += 1
         hidden = len(self.matches) - shown
+        silent = getattr(self, "_silent", [])
+        note = f" No answer from: {', '.join(silent)} (see Log)." if silent else ""
         if not self.matches:
-            self.find_status.config(text="No matches. Some sites have no search: use Add by name below.")
+            self.find_status.config(text="No matches. Some sites have no lookup: use the Add search box." + note)
         else:
             self.find_status.config(text=f"{shown} match(es), most popular first"
-                                         + (f" ({hidden} small hidden)." if hidden else "."))
+                                         + (f" ({hidden} small hidden)." if hidden else ".") + note)
 
     def _new_pick(self, source_id, value, label):
-        return Pick(source_id, value, label, self.quality_var.get(), self._limit())
-
-    def _limit(self):
-        try:
-            return max(1, int(self.limit_var.get()))
-        except (tk.TclError, ValueError):
-            return 50
+        """A pick from Find: Limit and Type come from the form; Sort/Min score only when it is the form's own site."""
+        cls = SOURCE_BY_ID[source_id]
+        p = Pick(source_id, value, label, limit=self._limit(), types=self._types(),
+                 randomize=bool(getattr(cls, "default_randomize", False)), prioritize=bool(cls.default_prioritize))
+        if cls is self._cls():
+            p.order = self._key(self.order_cb.get(), cls.order_choices)
+            p.min_score = self._key(self.min_cb.get(), cls.min_score_choices)
+            p.randomize = self.random_var.get()
+            p.prioritize = self.prio_var.get() if cls.has_media_priority else False
+        return p
 
     def _add_matches(self):
+        if not self._types():
+            messagebox.showinfo("No type chosen", "Tick Images, Videos or Audio in the Add search box.", parent=self)
+            return
         for iid in self.match_tree.selection():
             m = self.matches[int(iid)]
             self._add_pick(self._new_pick(m["source"], m["value"], m["label"]))
 
-    def _add_named(self):
-        label, value = self.add_site.get(), self.add_var.get().strip()
-        cls = next((c for c in SOURCE_CLASSES if c.label == label), None)
-        if not cls or not value:
+    def _submit(self):
+        """Add button: reads every box in the form (no separate Apply step)."""
+        cls = self._cls()
+        self._q_clean()
+        value = "" if self._ph else self.add_entry.get().strip()
+        if not value:
+            messagebox.showinfo("Query needed", f"Type something to search for ({cls.query_hint}).", parent=self)
             return
-        self._add_pick(self._new_pick(cls.id, value, f"{cls.label} {value}"))
-        self.add_var.set("")
+        if not self._types():
+            messagebox.showinfo("No type chosen", "Tick Images, Videos or Audio.", parent=self)
+            return
+        pick = Pick(cls.id, value, f"{cls.label} {value}",
+                    order=self._key(self.order_cb.get(), cls.order_choices),
+                    min_score=self._key(self.min_cb.get(), cls.min_score_choices),
+                    limit=self._limit(), types=self._types(), randomize=self.random_var.get(),
+                    prioritize=self.prio_var.get() if cls.has_media_priority else False)
+        self.cfg.update(limit=pick.limit, types=pick.types.split(","))
+        if self.edit_iid:
+            old = self.rows.get(self.edit_iid)
+            new_iid = self._iid(pick)
+            if new_iid != self.edit_iid and new_iid in self.rows:
+                self._status(f"'{value}' is already in the list.")
+                return
+            fields = ("source_id", "value", "order", "min_score", "limit", "types", "randomize", "prioritize")
+            if old and all(getattr(old, f) == getattr(pick, f) for f in fields):
+                pick.status, pick.kept = old.status, old.kept     # nothing changed: keep its history
+            self._remove_iid(self.edit_iid)
+            self._cancel_edit(reset_only=True)
+            self._add_pick(pick)
+            self._set_query("")
+            self._apply_placeholder()
+            self._status("Changes saved.")
+        elif self._add_pick(pick):
+            self._set_query("")
+            self._apply_placeholder()
+        self.add_entry.focus_set()
+
+    def _edit_selected(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        p = self.rows[iid]
+        cls = SOURCE_BY_ID.get(p.source_id)
+        if not cls:
+            return
+        self.edit_iid = iid
+        self.add_site.set(cls.label)
+        self._on_site_change()
+        self._set_query(p.value)
+        if cls.order_choices:
+            self.order_cb.set(self._label(p.order or cls.default_order, cls.order_choices))
+        if cls.min_score_choices:
+            self.min_cb.set(self._label(p.min_score, cls.min_score_choices))
+        self.limit_var.set(str(p.limit or cls.default_limit))
+        for k, v in self.type_vars.items():
+            v.set(k in (p.type_set() or {"image", "video"}))
+        self.random_var.set(p.randomize)
+        self.prio_var.set(p.prioritize)
+        self.submit_btn.config(text="Save changes")
+        self.cancel_btn.pack(side="left", padx=6)
+        self._status(f"Editing '{p.value}': change the boxes, then Save changes.")
+
+    def _cancel_edit(self, reset_only=False):
+        self.edit_iid = None
+        self.submit_btn.config(text="Add  →")
+        self.cancel_btn.pack_forget()
+        if not reset_only:
+            self._set_query("")
+            self._apply_placeholder()
+            self._on_site_change()
 
     # ================================================================ centre column logic
     def _iid(self, pick):
         return f"{pick.source_id}|{pick.value.strip().lower()}"
 
+    def _sort_text(self, p):
+        cls = SOURCE_BY_ID.get(p.source_id)
+        if not cls or not cls.order_choices:
+            return "-"
+        text = self._label(p.order or cls.default_order, cls.order_choices)
+        if p.min_score and cls.min_score_choices:
+            text += f" · {self._label(p.min_score, cls.min_score_choices)}"
+        return text
+
+    def _opts_text(self, p):
+        cls = SOURCE_BY_ID.get(p.source_id)
+        names = {"image": "img", "video": "vid", "audio": "aud"}
+        types = p.type_set()
+        parts = [] if types in (set(), {"image", "video"}, {"image", "video", "audio"}) else ["+".join(names[t] for t in names if t in types)]
+        if p.randomize:
+            parts.append("random")
+        if p.prioritize and cls:
+            parts.append(f"{cls.priority_media}s first")
+        return " ".join(parts)
+
+    def _row_values(self, p, running=False):
+        cls = SOURCE_BY_ID.get(p.source_id)
+        return (status_text(p, running), cls.label if cls else p.source_id, p.value, self._sort_text(p),
+                p.limit or (cls.default_limit if cls else ""), self._opts_text(p))
+
+    def _refresh_row(self, iid, running=False):
+        p = self.rows.get(iid)
+        if p and self.tree.exists(iid):
+            self.tree.item(iid, values=self._row_values(p, running), tags=(status_tag(p, running),))
+
     def _insert_row(self, pick):
-        cls = SOURCE_BY_ID.get(pick.source_id)
         iid = self._iid(pick)
         if iid in self.rows:
             return False
         self.rows[iid] = pick
-        self.tree.insert("", "end", iid=iid, values=(pick.value, cls.label if cls else pick.source_id,
-                                                      pick.quality or "Good", pick.limit or self._limit()))
+        self.tree.insert("", "end", iid=iid, values=self._row_values(pick), tags=(status_tag(pick),))
         return True
 
     def _add_pick(self, pick):
         if self._insert_row(pick):
-            self._log(f"added search {pick.source_id}:{pick.value} quality={pick.quality} limit={pick.limit}",
-                      "debug")
+            self._log(f"added search {pick.source_id}:{pick.value} order={pick.order or 'default'} "
+                      f"min_score={pick.min_score or '-'} limit={pick.limit} types={pick.types}", "debug")
             self._persist_picks()
             self._update_count()
-        else:
-            self._status(f"'{pick.value}' is already in the list.")
+            return True
+        self._status(f"'{pick.value}' is already in the list.")
+        return False
 
-    def _apply_selected(self):
-        q, lim = self.quality_var.get(), self._limit()
-        for iid in self.tree.selection():
-            p = self.rows[iid]
-            p.quality, p.limit = q, lim
-            self.tree.set(iid, "quality", q)
-            self.tree.set(iid, "limit", lim)
-        self._persist_picks()
+    def _remove_iid(self, iid):
+        self.rows.pop(iid, None)
+        if self.tree.exists(iid):
+            self.tree.delete(iid)
 
     def _remove_selected(self):
         for iid in self.tree.selection():
-            self.rows.pop(iid, None)
-            self.tree.delete(iid)
+            self._remove_iid(iid)
         self._persist_picks()
         self._update_count()
+
+    def _rerun_selected(self):
+        """Forget the last result so the row reads 'new' again (Start still skips files already collected)."""
+        for iid in self.tree.selection():
+            self.rows[iid].status, self.rows[iid].kept = "", 0
+            self._refresh_row(iid)
+        self._persist_picks()
+
+    def _context_menu(self, ev):
+        iid = self.tree.identify_row(ev.y)
+        if iid:
+            if iid not in self.tree.selection():
+                self.tree.selection_set(iid)
+            self.menu.tk_popup(ev.x_root, ev.y_root)
+
+    def _open_pick_folder(self):
+        for iid in self.tree.selection()[:1]:
+            p = self.rows[iid]
+            cls = SOURCE_BY_ID.get(p.source_id)
+            d = os.path.join(self.collection.dir, safe_name(cls.label if cls else p.source_id), safe_name(p.value)[:40])
+            os.makedirs(d, exist_ok=True)
+            open_path(d)
 
     def _clear_rows(self):
         if self.rows and messagebox.askyesno("Clear all", "Remove every search from the list?\n"
@@ -531,37 +769,75 @@ class CollectorApp(tk.Tk):
 
     def _update_count(self):
         n = len(self.rows)
-        self.count_lbl.config(text=(f"{n} search(es). Select rows and press Remove, or Delete key." if n else
-                                    "Nothing here yet: Find a topic on the left, select matches, press Add →"))
+        self.count_lbl.config(text=(f"{n} search(es). Double-click a row to edit it." if n else
+                                    "Nothing here yet: Find a topic on the left and press Add →, or fill in the Add search box"))
+
+    # ================================================================ site check
+    def _check_sites(self):
+        if self._busy() or self._check_stop is not None:
+            messagebox.showinfo("Busy", "Wait for the current run or check to finish (or press Stop).", parent=self)
+            return
+        n = len(SOURCE_CLASSES)
+        self._check_stop, self._check_done = threading.Event(), 0
+        self.check_btn.config(state="disabled")
+        self.start_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
+        self.progress.config(value=0, maximum=n)
+        self._status(f"Checking {n} sites (one tiny search each)...")
+        self._log(f"SITE CHECK: one item from each of {n} sites", "debug")
+        creds, stop = settings.credentials_for(self.cfg), self._check_stop
+
+        def work():
+            res, tmp = collector.check_sites(creds, on_result=lambda r: self._check_q.put(("one", r)), stop_event=stop)
+            self._check_q.put(("all", res, tmp))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _handle_check(self, ev):
+        if ev[0] == "one":
+            r = ev[1]
+            self._check_done += 1
+            self.progress.config(value=self._check_done)
+            self._status(f"Checking sites... {self._check_done}/{self.progress['maximum']:.0f}  ({r['label']}: {r['result']})")
+            self._log(f"site check {r['label']}: {r['result']} in {r['elapsed']}s {r['detail']}".rstrip(),
+                      "error" if r["result"] == "fail" else "debug")
+            for h in r["http"]:
+                self._log(f"site check {r['label']}: HTTP {h.get('status')} {h.get('ms')}ms {h.get('url')}"
+                          + (f" ERROR {h['error']}" if h.get("error") else ""), "debug")
+            return
+        _, results, tmp = ev
+        self._check_stop = None
+        self.check_btn.config(state="normal")
+        self.start_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
+        ok = sum(1 for r in results if r["result"] == "ok")
+        self._status(f"Site check done: {ok} of {len(results)} sites live.")
+        TestResultsWindow(self, results, tmp)
 
     # ================================================================ running
     def _start(self):
         picks = list(self.rows.values())
         if not picks:
             messagebox.showinfo("Nothing to run", "Add at least one search first: Find a topic and press Add →, "
-                                "or use Add by name.", parent=self)
+                                "or use the Add search box.", parent=self)
             return
-        types = {k for k, v in self.type_vars.items() if v.get()}
-        if not types:
-            messagebox.showinfo("No type chosen", "Tick Images, Videos, or Audio.", parent=self)
-            return
-        default_limit = self._limit()
-        self.cfg.update(limit=default_limit, quality=self.quality_var.get(), types=sorted(types),
-                        randomize=self.random_var.get())
         settings.save(self.cfg)
-        opts = Options(limit=default_limit, quality=self.quality_var.get(), types=types,
-                       randomize=self.random_var.get(), sort=self.sort_var.get(), time_range=self.time_var.get())
-        self._limits = {self._iid(p): (p.limit or default_limit) for p in picks}
+        opts = Options(limit=self._limit(), types={"image", "video"})
+        self._limits = {self._iid(p): (p.limit or SOURCE_BY_ID[p.source_id].default_limit) for p in picks}
         self._done_total = 0
         self.progress.config(value=0, maximum=max(1, sum(self._limits.values())))
         self.job = Job(self.collection, picks, opts, settings.credentials_for(self.cfg))
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self._status(f"Running {len(picks)} search(es)...")
-        self._log(f"RUN {len(picks)} search(es), types={sorted(types)}, default limit={default_limit}", "debug")
+        self._log(f"RUN {len(picks)} search(es)", "debug")
+        self._running_iid = None
         self.job.start()
 
     def _stop(self):
+        if self._check_stop is not None:
+            self._check_stop.set()
+            self._status("Stopping the site check...")
+            return
         if self.job:
             self.job.stop()
             self._status("Stopping after the current download...")
@@ -571,6 +847,11 @@ class CollectorApp(tk.Tk):
         try:
             while True:
                 self._show_matches(*self._suggest_q.get_nowait())
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                self._handle_check(self._check_q.get_nowait())
         except queue.Empty:
             pass
         try:
@@ -588,11 +869,13 @@ class CollectorApp(tk.Tk):
             self._log(ev[1], ev[2])
         elif kind == "progress":
             self._status(f"{ev[3]} ({ev[1]})")
+            self._mark_running(ev[3])
         elif kind == "item":
             self._add_recent(ev[1], ev[2], ev[3])
             self.progress.step(1)
         elif kind == "pick_done":
             _, pick, count, status, detail = ev
+            self._refresh_row(self._iid(pick))
             self._done_total += self._limits.get(self._iid(pick), 0)
             self.progress.config(value=max(self.progress["value"], min(self._done_total, self.progress["maximum"])))
             self._log(f"DONE {pick.label or pick.value}: {status}" + (f" - {detail}" if detail else f" ({count} new)"),
@@ -605,6 +888,18 @@ class CollectorApp(tk.Tk):
             self._log(f"RUN {'stopped' if ev[2] else 'finished'}: {ev[1]} new item(s)", "debug")
 
     # ================================================================ right column: preview + strip
+    def _mark_running(self, text):
+        """Progress text ends 'Site: value'; show that row as running."""
+        for iid, p in self.rows.items():
+            cls = SOURCE_BY_ID.get(p.source_id)
+            if text.endswith(f"{cls.label if cls else p.source_id}: {p.value}"):
+                if iid != self._running_iid:
+                    prev, self._running_iid = self._running_iid, iid
+                    if prev:
+                        self._refresh_row(prev)
+                    self._refresh_row(iid, running=True)
+                return
+
     def _add_recent(self, pick, item, pil):
         self.recent.insert(0, {"item": item, "pick": pick, "pil": pil, "photo": None})
         del self.recent[STRIP_MAX:]

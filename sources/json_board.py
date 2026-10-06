@@ -22,23 +22,30 @@ class ApiError(ValueError):
     """The API answered, but not usefully. str() is the reason shown in the log."""
 
 
+def score_choices(values, template="score:>={n}"):
+    """Min-score dropdown: Any, plus one choice per value."""
+    return [("", "Any", {})] + [(str(n), f"{n}+", {"query_suffix": template.format(n=n)}) for n in values]
+
+
+SCORE_ORDERS = [("score", "Highest score", {"query_suffix": "order:score"}), ("new", "Newest", {})]
+
+
 class JsonBoardSource(Source):
     category = "Image boards"
     has_media_priority = True
-    supports_quality = True
     query_hint = "tags"
+    order_choices = SCORE_ORDERS + [("random", "Random", {"query_suffix": "order:random"})]
+    default_order = "score"
+    min_score_choices = score_choices((5, 10, 25, 50, 100))
 
     base_url = ""
     prefix = ""
     user_agent = "MediaCollector/0.2 (personal media collector)"
     min_interval = 1.0
     page_size = 100
-    quality_scores = {"Good": 10, "Best": 50}
 
-    def __init__(self, api_key="", user_id="", base_url=""):
+    def __init__(self, api_key="", user_id=""):
         self.api_key, self.user_id = api_key, user_id
-        if base_url:
-            self.base_url = base_url.rstrip("/")
         self._last = 0.0
         self.seen_hashes = set()
 
@@ -51,13 +58,9 @@ class JsonBoardSource(Source):
         h = {"User-Agent": self.user_agent, "Accept": "application/json"}
         return h
 
-    def _query_for(self, query, quality_suffix=""):
+    def _normalize_query(self, query):
+        """Hook: tidy the final query (e.g. join appended tokens with commas)."""
         return query
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        n = cls.quality_scores.get(quality)
-        return {"query_suffix": f"score:>={n}"} if n else {}
 
     # ---- http
     def _wait(self):
@@ -112,6 +115,7 @@ class JsonBoardSource(Source):
         if query_blocked(query):
             log(f"[{self.label}] that search asks for material this tool never collects - skipped.", "warning")
             return []
+        query = self._normalize_query(query)
         log(f"Searching {self.label} for '{query}'...")
         results, images_kept, videos_kept = [], 0, 0
         cursor, scanned, page_no, blocked = None, 0, 0, 0

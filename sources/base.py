@@ -3,14 +3,13 @@ class Source:
     id = "base"
     label = "Base"
     query_hint = "query"
-    has_sort = False
-    has_time = True  # shown only when has_sort
-    sort_options = []
-    time_options = []
-    default_sort = ""
     default_limit = 20
     category = "Other"          # groups sites in the picker
-    supports_quality = False    # resolve_quality() applies
+    # Sort dropdown: (key, label, params); params = any of {"sort", "time_range", "query_suffix"}.
+    order_choices = []
+    default_order = ""
+    min_score_choices = []      # optional second dropdown (boorus), same shape
+    order_help = "How results are ordered. Choices differ per site."
     default_randomize = False   # Random box starts ticked
     priority_media = "image"    # what Prioritize favours: "image" or "video"
     default_prioritize = False  # Prioritize box starts ticked
@@ -28,12 +27,21 @@ class Source:
 
     @classmethod
     def suggest(cls, query):
-        """Optional: real matches for a keyword from the site itself, so the UI can show tickable chips.
-        Returns [{"value": text to search, "label": display, "count": int or None}]; [] when unsupported.
-        Must be fast, never raise, and use only the site's own lookup (no guessing)."""
+        """Optional: real matches for a keyword from the site itself, for a pick-list in the UI.
+        Returns [{"value": text to search, "label": display, "count": int or None}]; [] when unsupported. Never raises."""
         return []
 
     @classmethod
-    def resolve_quality(cls, quality):
-        """Map Any/Good/Best to this site's controls: {'sort', 'time_range', 'query_suffix'}; {} = nothing."""
-        return {}
+    def resolve(cls, order="", min_score=""):
+        """Choice keys -> {'sort', 'time_range', 'query_suffix'} ('' = site default / no minimum)."""
+        out, suffixes = {}, []
+        for choices, key in ((cls.order_choices, order or cls.default_order), (cls.min_score_choices, min_score)):
+            params = next((p for k, _, p in choices if k == key), {})
+            for name, value in params.items():
+                if name == "query_suffix":
+                    suffixes.append(value)
+                else:
+                    out[name] = value
+        if suffixes:
+            out["query_suffix"] = " ".join(suffixes)
+        return out

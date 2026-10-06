@@ -42,57 +42,88 @@ class RedditSource(Source):
     id = "reddit"
     check_query = "aww"
     category = "Reddit"
-    supports_quality = True
+    order_choices = [
+        ("hot", "Hot now", {"sort": "Hot"}),
+        ("new", "New", {"sort": "New"}),
+        ("rising", "Rising", {"sort": "Rising"}),
+        ("top_day", "Top today", {"sort": "Top", "time_range": "day"}),
+        ("top_week", "Top this week", {"sort": "Top", "time_range": "week"}),
+        ("top_month", "Top this month", {"sort": "Top", "time_range": "month"}),
+        ("top_year", "Top this year", {"sort": "Top", "time_range": "year"}),
+        ("top_all", "Top all time", {"sort": "Top", "time_range": "all"}),
+    ]
+    default_order = "hot"
+    order_help = ("Hot = popular right now. New = newest first. Rising = gaining votes now. Top = best of that period. "
+                  "Reddit returns at most 100 posts per request: Hot and New keep refreshing, Top choices run out.")
+    label = "Reddit"
+    query_hint = "subreddit (e.g. cats)"
+    has_media_priority = True
+
+    @classmethod
+    def _get_json(cls, url, timeout=8):
+        req = urllib.request.Request(url, headers={**BROWSER_HEADERS, "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except Exception:
+            return None
+
+    @classmethod
+    def _sub_exists(cls, name, timeout=8):
+        """True when r/name is a real, readable subreddit. Tries about.json, then the RSS feed
+        (the route the scraper itself uses, so it works whenever downloading does)."""
+        data = cls._get_json(f"https://www.reddit.com/r/{urllib.parse.quote(name)}/about.json", timeout)
+        if isinstance(data, dict) and isinstance(data.get("data"), dict) and data["data"].get("display_name"):
+            return data["data"]
+        req = urllib.request.Request(f"https://www.reddit.com/r/{urllib.parse.quote(name)}/.rss?limit=1",
+                                     headers=BROWSER_HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                if r.status == 200 and b"<feed" in r.read(4000):
+                    return {"display_name": name, "subscribers": None}
+        except Exception:
+            pass
+        return None
 
     @classmethod
     def suggest(cls, query):
-        """Real subreddits: an exact-name match first (if r/<query> exists), then Reddit's own search."""
-        import json, re, urllib.parse, urllib.request
-        q = query.strip().lstrip("/").removeprefix("r/")
-        if not q:
+        """Subreddits for a word: an exact-name check first (cats, cat_s, 'cat ears' -> catears / cat_ears),
+        then Reddit's own search. Never raises."""
+        text = re.sub(r"^/?r/", "", query.strip(), flags=re.I)
+        if not text:
             return []
-        headers = {"User-Agent": "MediaCollector/0.2"}
+        found = {}
 
-        def get(url):
-            try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=8) as r:
-                    return json.loads(r.read().decode("utf-8", "replace"))
-            except Exception:
-                return None
-
-        out, seen = [], set()
-
-        def add(d):
+        def add(d, exact=False):
             name = d.get("display_name")
-            if name and name.lower() not in seen and not d.get("quarantine"):
-                seen.add(name.lower())
-                out.append({"value": name, "label": f"Reddit r/{name}", "count": d.get("subscribers")})
+            if name and name.lower() not in found:
+                found[name.lower()] = {"value": name, "label": f"Reddit r/{name}",
+                                       "count": d.get("subscribers")}
 
-        # exact: "cat ears" -> r/catears / r/cat_ears
-        for guess in dict.fromkeys([re.sub(r"\s+", "", q), re.sub(r"\s+", "_", q)]):
-            if re.fullmatch(r"[A-Za-z0-9_]{2,21}", guess):
-                data = get(f"https://www.reddit.com/r/{guess}/about.json")
-                if isinstance(data, dict) and data.get("kind") == "t5" and data.get("data"):
-                    add(data["data"])
-        qs = urllib.parse.urlencode({"q": q, "limit": 10, "include_over_18": "on", "sort": "relevance"})
-        found = get(f"https://www.reddit.com/subreddits/search.json?{qs}")
-        for k in ((found or {}).get("data") or {}).get("children") or []:
-            add(k.get("data") or {})
-        return out
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        return {"Any": {"sort": "New", "time_range": "month"},
-                "Good": {"sort": "Top", "time_range": "month"},
-                "Best": {"sort": "Top", "time_range": "year"}}.get(quality, {})
-    label = "Reddit"
-    query_hint = "subreddit (e.g. cats)"
-    has_sort = True
-    has_time = True
-    sort_options = ["Hot", "New", "Rising", "Top", "Controversial"]
-    time_options = ["hour", "day", "week", "month", "year", "all"]
-    default_sort = "New"
-    has_media_priority = True
+        words = text.split()
+        guesses = [text.replace(" ", "")]
+        if len(words) > 1:
+            guesses += ["_".join(words)]
+        for g in dict.fromkeys(x for x in guesses if re.fullmatch(r"\w{2,21}", x)):
+            hit = cls._sub_exists(g)
+            if hit:
+                add(hit, exact=True)
+        qs = urllib.parse.urlencode({"q": text, "limit": 8, "include_over_18": "on", "sort": "relevance"})
+        data = cls._get_json(f"https://www.reddit.com/subreddits/search.json?{qs}")
+        try:
+            for k in data["data"]["children"]:
+                add(k.get("data") or {})
+        except (TypeError, KeyError):
+            pass
+        if len(found) < 3:                       # second search route, in case the first is blocked
+            qs = urllib.parse.urlencode({"query": text, "include_over_18": "true", "include_profiles": "false"})
+            data = cls._get_json(f"https://www.reddit.com/api/subreddit_autocomplete_v2.json?{qs}")
+            try:
+                for k in data["data"]["children"]:
+                    add(k.get("data") or {})
+            except (TypeError, KeyError):
+                pass
+        return list(found.values())
 
     def __init__(self):
         self.rate_limiter = RateLimiter()

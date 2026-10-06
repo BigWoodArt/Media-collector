@@ -35,18 +35,15 @@ class FreesoundSource(Source):
     id = "freesound"
     check_query = "rain"
     category = "Audio"
-    supports_quality = True
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        return {"Any": {"sort": "Relevance"}, "Good": {"sort": "Downloads"},
-                "Best": {"sort": "Rating"}}.get(quality, {})
+    order_choices = [
+        ("relevance", "Relevance", {"sort": "Relevance"}),
+        ("downloads", "Most downloaded", {"sort": "Downloads"}),
+        ("rating", "Highest rated", {"sort": "Rating"}),
+        ("newest", "Newest", {"sort": "Newest"}),
+    ]
+    default_order = "relevance"
     label = "Freesound"
     query_hint = "tag or keyword (e.g. rain)"
-    has_sort = True
-    has_time = False
-    sort_options = ["Relevance", "Rating", "Downloads", "Newest"]
-    default_sort = "Relevance"
     default_limit = 5
 
     def __init__(self, api_key=""):

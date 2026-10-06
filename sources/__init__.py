@@ -1,4 +1,4 @@
-SOURCES_VERSION = "2026.10.05.1"   # bump on any change to the shared scraper files
+SOURCES_VERSION = "2026.10.05.2"   # bump on any change to the shared scraper files
 
 from sources.reddit_source import RedditSource
 from sources.redgifs_source import RedgifsSource
@@ -22,8 +22,7 @@ SOURCE_CLASSES = [RedditSource, RedgifsSource, SoundgasmSource, FreesoundSource,
                   Rule34Source, SafebooruSource, TbibSource, XbooruSource,
                   E621Source, DanbooruSource, YandereSource, KonachanSource, DerpibooruSource,
                   WallhavenSource, LemmySource]
-# Civitai is switched off: its image search has been down for maintenance and its public search returns
-# models, not tagged images. Add CivitaiSource back to SOURCE_CLASSES when image search returns.
+# Civitai is switched off: image search has been down and public search returns models, not tagged images.
 DISABLED_SOURCE_CLASSES = [CivitaiSource]
 SOURCE_BY_LABEL = {c.label: c for c in SOURCE_CLASSES}
 SOURCE_LABELS = [c.label for c in SOURCE_CLASSES]

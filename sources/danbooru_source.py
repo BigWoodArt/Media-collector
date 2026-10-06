@@ -10,8 +10,9 @@ class DanbooruSource(JsonBoardSource):
     base_url = "https://danbooru.donmai.us"
     prefix = "db_"
     page_size = 100
-    quality_scores = {"Good": 20, "Best": 100}
     query_hint = "tags, max 2 (e.g. cat_ears solo)"
+    order_help = ("Highest score sorts the whole site by score; Newest is the default; Random shuffles. "
+                  "Free accounts search 2 tags: if you see a tag-limit error, use fewer tags or add login + key (Options).")
 
     def _auth(self):
         return {"login": self.user_id, "api_key": self.api_key} if self.user_id and self.api_key else {}

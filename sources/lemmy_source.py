@@ -16,19 +16,23 @@ class LemmySource(JsonBoardSource):
     prefix = "lm_"
     page_size = 40
     min_interval = 1.5
-    has_sort, has_time = True, False
-    sort_options = ["Hot", "New", "TopDay", "TopWeek", "TopMonth", "TopYear", "TopAll"]
-    default_sort = "TopMonth"
+    order_choices = [
+        ("hot", "Hot", {"sort": "Hot"}),
+        ("new", "New", {"sort": "New"}),
+        ("top_day", "Top today", {"sort": "TopDay"}),
+        ("top_week", "Top this week", {"sort": "TopWeek"}),
+        ("top_month", "Top this month", {"sort": "TopMonth"}),
+        ("top_year", "Top this year", {"sort": "TopYear"}),
+        ("top_all", "Top all time", {"sort": "TopAll"}),
+    ]
+    default_order = "top_month"
+    min_score_choices = []
     query_hint = "community or community@instance"
     DEFAULT_INSTANCE = "lemmy.world"
 
     def __init__(self, api_key="", instance=""):
         super().__init__(api_key=api_key)
         self.instance = (instance or self.DEFAULT_INSTANCE).strip().replace("https://", "").strip("/")
-
-    @classmethod
-    def resolve_quality(cls, quality):
-        return {"Good": {"sort": "TopMonth"}, "Best": {"sort": "TopYear"}}.get(quality, {})
 
     def _headers(self):
         h = {"User-Agent": self.user_agent, "Accept": "application/json"}
@@ -44,7 +48,7 @@ class LemmySource(JsonBoardSource):
         name, host = self._split(query)
         page = cursor or 1
         params = {"community_name": f"{name}@{host}" if host != self.instance else name,
-                  "sort": getattr(self, "_sort", None) or self.default_sort,
+                  "sort": getattr(self, "_sort", None) or "TopMonth",
                   "limit": self.page_size, "page": page, "type_": "All"}
         data = self._get_json(f"https://{self.instance}/api/v3/post/list?{urllib.parse.urlencode(params)}")
         if isinstance(data, dict) and data.get("error"):

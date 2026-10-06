@@ -48,7 +48,7 @@ class Tooltip:
 
 def tip(widget, text):
     """Attaches a hover tooltip to an existing widget. Returns the widget."""
-    Tooltip(widget, text)
+    widget.tooltip = Tooltip(widget, text)      # .tooltip.text can be changed later
     return widget
 
 

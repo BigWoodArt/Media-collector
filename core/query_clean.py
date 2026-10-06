@@ -11,8 +11,15 @@ URL_CLEANUP = {
     "gelbooru": re.compile(r'^https?://(?:www\.)?gelbooru\.com/index\.php\?.*[?&]tags=', re.I),
     "realbooru": re.compile(r'^https?://(?:www\.)?realbooru\.com/index\.php\?.*[?&]tags=', re.I),
     "hypnohub": re.compile(r'^https?://(?:www\.)?hypnohub\.net/post(?:/index)?(?:\.json)?\?.*[?&]tags=', re.I),
+    "danbooru": re.compile(r'^https?://danbooru\.donmai\.us/posts\?.*[?&]tags=', re.I),
+    "e621": re.compile(r'^https?://e621\.net/posts\?.*[?&]tags=', re.I),
+    "yandere": re.compile(r'^https?://yande\.re/post\?.*[?&]tags=', re.I),
+    "konachan": re.compile(r'^https?://konachan\.(?:com|net)/post\?.*[?&]tags=', re.I),
+    "derpibooru": re.compile(r'^https?://(?:www\.)?derpibooru\.org/search\?.*[?&]q=', re.I),
+    "wallhaven": re.compile(r'^https?://wallhaven\.cc/search\?.*[?&]q=', re.I),
 }
-TAG_STYLE = {"gelbooru", "realbooru", "hypnohub", "erome"}
+TAG_STYLE = {"gelbooru", "realbooru", "hypnohub", "erome", "danbooru", "e621", "yandere", "konachan",
+             "derpibooru", "wallhaven"}
 
 
 def clean_query(site_id: str, text: str) -> str:

@@ -36,7 +36,11 @@ class Contract(unittest.TestCase):
                 self.assertIn(c.priority_media, ("image", "video"))
                 self.assertNotIn(c.id, ids)
                 ids.add(c.id)
-                self.assertIsInstance(c.resolve_quality("Good"), dict)
+                self.assertIsInstance(c.resolve(), dict)
+                for key, label, params in list(c.order_choices) + list(c.min_score_choices):
+                    self.assertTrue(key is not None and label and isinstance(params, dict))
+                if c.order_choices:
+                    self.assertIn(c.default_order, [k for k, _, _ in c.order_choices])
         self.assertRegex(SOURCES_VERSION, r"^\d{4}\.\d{2}\.\d{2}")
 
     def test_booru_post_id_prefixes_are_unique(self):
@@ -217,10 +221,9 @@ class Redgifs(unittest.TestCase):
     def test_every_sort_and_quality_maps_to_a_valid_order(self):
         from sources.redgifs_source import ORDER_MAP, RedgifsSource
         self.assertLessEqual(set(ORDER_MAP.values()), self.VALID)
-        self.assertEqual(set(RedgifsSource.sort_options), set(ORDER_MAP))
-        for q in ("Any", "Good", "Best"):
-            self.assertIn(RedgifsSource.resolve_quality(q)["sort"], ORDER_MAP)
-        self.assertEqual(ORDER_MAP[RedgifsSource.default_sort], "score")
+        for key, _, params in RedgifsSource.order_choices:
+            self.assertIn(params["sort"], ORDER_MAP)
+        self.assertEqual(ORDER_MAP[RedgifsSource.resolve()["sort"]], "score")
 
     def test_default_search_uses_order_score_like_the_website(self):
         h = lambda u: reply(json.dumps({"token": "T"})) if "auth" in u else reply(json.dumps({"gifs": []}))
