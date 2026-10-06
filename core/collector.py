@@ -285,6 +285,7 @@ class Job:
             self._emit("pick_done", pick, 0, "failed", "unknown site")
             return
         opts = self.options
+        self.skip_event.clear()          # a Skip pressed during the previous search must not hit this one
         limit = pick.limit or opts.limit or cls.default_limit
         types = pick.type_set() or opts.types
         resolved = cls.resolve(pick.order, pick.min_score)

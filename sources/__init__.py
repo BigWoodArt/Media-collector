@@ -16,12 +16,15 @@ from sources.derpibooru_source import DerpibooruSource
 from sources.wallhaven_source import WallhavenSource
 from sources.civitai_source import CivitaiSource   # kept for later; see DISABLED below
 from sources.lemmy_source import LemmySource
+from sources.sexcom_source import SexComPicsSource, SexComGifsSource
+from sources.hentaifoundry_source import HentaiFoundrySource
 
 SOURCE_CLASSES = [RedditSource, RedgifsSource, SoundgasmSource, FreesoundSource, EromeSource,
                   GelbooruSource, RealbooruSource, HypnohubSource,
                   Rule34Source, SafebooruSource, TbibSource, XbooruSource,
                   E621Source, DanbooruSource, YandereSource, KonachanSource, DerpibooruSource,
-                  WallhavenSource, LemmySource]
+                  WallhavenSource, LemmySource,
+                  SexComPicsSource, SexComGifsSource, HentaiFoundrySource]
 # Civitai is switched off: image search has been down and public search returns models, not tagged images.
 DISABLED_SOURCE_CLASSES = [CivitaiSource]
 SOURCE_BY_LABEL = {c.label: c for c in SOURCE_CLASSES}

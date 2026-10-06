@@ -152,6 +152,9 @@ class JsonBoardSource(Source):
                     continue
                 if skip_ids and f"{self.prefix}{pid}" in skip_ids:
                     continue
+                url = self._resolve_url(post, log)       # most sites already know it; some need a second page
+                if not url:
+                    continue
                 ext = os.path.splitext(url.split("?")[0])[1].lower() or ".jpg"
                 mtype = "video" if ext in VIDEO_EXTS else "audio" if ext in AUDIO_EXTS else "image"
                 if prioritize_images and mtype == "video" and videos_kept * 4 >= images_kept:
@@ -199,6 +202,10 @@ class JsonBoardSource(Source):
         progress(len(results), max(len(results), 1), "Done")
         log(f"--- {self.label} '{query}': {len(results)} item(s) collected ---")
         return results
+
+    def _resolve_url(self, post, log):
+        """Hook: the file URL for a post (default: the one the listing gave). Return None to skip the post."""
+        return post.get("url")
 
     def _download_headers(self):
         return {"User-Agent": self.user_agent, "Referer": (self.base_url or "") + "/"}

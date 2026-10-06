@@ -126,11 +126,6 @@ class CollectorApp(tk.Tk):
         foot.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
         self.progress = ttk.Progressbar(foot, mode="determinate")
         self.progress.pack(fill="x", pady=(0, 6))
-        self.dl_row = ttk.Frame(foot)             # shown only while a big file is downloading
-        self.dl_bar = ttk.Progressbar(self.dl_row, mode="determinate")
-        self.dl_bar.pack(side="left", fill="x", expand=True)
-        self.dl_lbl = ttk.Label(self.dl_row, text="", style="Muted.TLabel")
-        self.dl_lbl.pack(side="left", padx=(8, 0))
         row = ttk.Frame(foot)
         row.pack(fill="x")
         self._foot_row = row
@@ -149,6 +144,9 @@ class CollectorApp(tk.Tk):
         self.skip_btn = tip(ttk.Button(row, text="Skip file", command=self._skip, state="disabled"),
                             "Abandon the file that is downloading right now and carry on with the next one.")
         self.skip_btn.pack(side="right")
+        # current-file progress sits inline on this line (fixed width, so nothing shifts when it appears)
+        self.dl_lbl = ttk.Label(row, text="", style="Muted.TLabel", width=46, anchor="e")
+        self.dl_lbl.pack(side="right", padx=(0, 10))
 
         self.nb = ttk.Notebook(self)
         self.nb.pack(side="top", fill="both", expand=True, padx=12, pady=4)
@@ -849,6 +847,7 @@ class CollectorApp(tk.Tk):
         self.job = Job(self.collection, picks, opts, settings.credentials_for(self.cfg))
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
+        self.skip_btn.config(state="normal")
         self._status(f"Running {len(picks)} search(es)...")
         self._log(f"RUN {len(picks)} search(es)", "debug")
         self._running_iid = None
@@ -861,21 +860,13 @@ class CollectorApp(tk.Tk):
 
     def _show_dl(self, done, total, bps, url):
         if not done and not total:
-            self.dl_row.pack_forget()
-            self.skip_btn.config(state="disabled")
+            self.dl_lbl.config(text="")
             return
-        if not self.dl_row.winfo_manager():
-            self.dl_row.pack(fill="x", pady=(0, 4), before=self._foot_row)
-        self.skip_btn.config(state="normal")
         name = os.path.basename(url.split("?")[0]) or "file"
-        if total:
-            self.dl_bar.config(mode="determinate", maximum=total, value=done)
-            text = f"{name[:28]}  {_size(done)} of {_size(total)}  ·  {_size(bps)}/s"
-        else:
-            self.dl_bar.config(mode="indeterminate")
-            self.dl_bar.step(3)
-            text = f"{name[:28]}  {_size(done)}  ·  {_size(bps)}/s"
-        self.dl_lbl.config(text=text)
+        name = name if len(name) <= 16 else name[:13] + "..."
+        pct = f" ({done * 100 // total}%)" if total else ""
+        of = f" of {_size(total)}" if total else ""
+        self.dl_lbl.config(text=f"{name}  {_size(done)}{of}{pct}  ·  {_size(bps)}/s")
 
     def _stop(self):
         if self._check_stop is not None:
@@ -952,7 +943,7 @@ class CollectorApp(tk.Tk):
             self.start_btn.config(state="normal")
             self.stop_btn.config(state="disabled")
             self.skip_btn.config(state="disabled")
-            self.dl_row.pack_forget()
+            self.dl_lbl.config(text="")
             self.progress.config(value=self.progress["maximum"])
             self._status(f"{'Stopped' if ev[2] else 'Finished'}: {ev[1]} new item(s).")
             self._log(f"RUN {'stopped' if ev[2] else 'finished'}: {ev[1]} new item(s)", "debug")

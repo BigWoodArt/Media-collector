@@ -48,7 +48,6 @@ class _Stream:
             self._texty = any(t in (resp.headers.get("Content-Type") or "").lower() for t in _TEXTY)
         except Exception:
             self._texty = True
-        ctl.skip.clear()                 # a Skip pressed between files must not hit this one
         try:                             # short socket waits so a stalled transfer can be interrupted
             resp.fp.raw._sock.settimeout(1.0)
             self._short = True
@@ -72,7 +71,7 @@ class _Stream:
     def _check(self):
         if self._ctl.stop.is_set():
             raise DownloadInterrupted("Stopped by user")
-        if self._ctl.skip.is_set():
+        if self._ctl.skip.is_set() and not self._texty:     # API pages are never skipped, only files
             self._ctl.skip.clear()
             raise DownloadInterrupted("Skipped by user")
         cap = self._ctl.max_bytes

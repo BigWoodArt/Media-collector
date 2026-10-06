@@ -1,4 +1,4 @@
-# Media Collector  (v0.1.4)
+# Media Collector  (v0.1.5)
 
 Type a topic, tick the matches, press Start. The program asks each supported site for its own real
 subreddits, tags, communities and creators, downloads what you chose into a themed folder, and shows
@@ -40,7 +40,7 @@ reports; **Export log** saves it (API keys are never written to it).
 
 ## Sites
 Reddit, Redgifs, Soundgasm, Freesound, Erome, Gelbooru, Realbooru, Hypnohub, Rule34, Safebooru, TBIB, Xbooru,
-e621, Danbooru, Yande.re, Konachan, Derpibooru, Wallhaven, Lemmy.
+e621, Danbooru, Yande.re, Konachan, Derpibooru, Wallhaven, Lemmy, Sex.com (Pics, GIFs), Hentai Foundry (needs your browser cookie).
 Optional accounts/keys go in **Settings** and are stored only in `collector_settings.json` beside the program.
 Civitai is switched off for now (its image search is down upstream); the code is kept in `sources/civitai_source.py`.
 

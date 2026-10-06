@@ -16,10 +16,13 @@ URL_CLEANUP = {
     "yandere": re.compile(r'^https?://yande\.re/post\?.*[?&]tags=', re.I),
     "konachan": re.compile(r'^https?://konachan\.(?:com|net)/post\?.*[?&]tags=', re.I),
     "derpibooru": re.compile(r'^https?://(?:www\.)?derpibooru\.org/search\?.*[?&]q=', re.I),
+    "sexcom_pics": re.compile(r'^https?://(?:www\.)?sex\.com/[a-z]{2}/pics\?(?:.*&)?search=', re.I),
+    "sexcom_gifs": re.compile(r'^https?://(?:www\.)?sex\.com/[a-z]{2}/gifs\?(?:.*&)?search=', re.I),
+    "hentaifoundry": re.compile(r'^https?://(?:www\.)?hentai-foundry\.com/search/index\?(?:.*&)?query=', re.I),
     "wallhaven": re.compile(r'^https?://wallhaven\.cc/search\?.*[?&]q=', re.I),
 }
 TAG_STYLE = {"gelbooru", "realbooru", "hypnohub", "erome", "danbooru", "e621", "yandere", "konachan",
-             "derpibooru", "wallhaven"}
+             "derpibooru", "wallhaven", "sexcom_pics", "sexcom_gifs", "hentaifoundry"}
 
 
 def clean_query(site_id: str, text: str) -> str:

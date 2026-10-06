@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 APP_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = APP_DIR / "collector_settings.json"
 
@@ -21,6 +21,7 @@ CRED_FIELDS = [
     ("wallhaven", "api_key", "Wallhaven API key", "Free, from account settings. Needed for NSFW results."),
     ("lemmy", "api_key", "Lemmy login token", "Your account's JWT. Needed to see NSFW posts."),
     ("lemmy", "instance", "Lemmy home instance", "e.g. lemmy.world - where your account lives."),
+    ("hentaifoundry", "cookie", "Hentai Foundry cookie", "Needed: the site blocks scripts. Copy the Cookie header from your own browser (F12 > Network > any request to the site). It expires."),
     ("freesound", "api_key", "Freesound API key", "Free, from freesound.org/apiv2/apply."),
 ]
 CRED_FIELDS = [f for f in CRED_FIELDS if f[1]]

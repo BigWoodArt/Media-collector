@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.5
+- Download progress is now plain text on the bottom line (no second bar, nothing moves). **Skip file** is red and
+  active while a run is going, greyed out otherwise; it also works while a file is still waiting for the server.
+- New sites: **Sex.com Pics**, **Sex.com GIFs** (first page from the page's own data, later pages from its search API;
+  Most popular / Newest) and **Hentai Foundry** (search grid, then each picture's page for the full-size file).
+  Hentai Foundry blocks scripts with a bot check; the program does not work around it. Paste the Cookie header from your
+  own browser under Settings > Hentai Foundry cookie.
+
 ## v0.1.4
 - Big downloads: live bar (`12.3 MB of 75 MB - 1.4 MB/s`) and a **Skip file** button. **Stop** now cuts a download
   within about a second. New Settings option: skip files over N MB (checked from the size header, before downloading).
