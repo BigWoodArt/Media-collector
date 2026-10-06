@@ -85,6 +85,53 @@ class BooruFamilySource(Source):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8", errors="ignore")
 
+    @classmethod
+    def suggest(cls, query):
+        """Tag lookup with a post count. Booru engines differ, so a few known autocomplete routes are tried in
+        turn (Gelbooru-style autocomplete2, classic autocomplete.php, Moebooru tag list). Never raises."""
+        q = query.strip().lower().replace(" ", "_")
+        if not q:
+            return []
+        site = (cls.site_url or cls.base_url).replace("://api.", "://")
+        enc = urllib.parse.quote(q)
+        routes = (f"{site}/index.php?page=autocomplete2&term={enc}&type=tag_query&limit=10",
+                  f"{site}/autocomplete.php?q={enc}",
+                  f"{site}/public/autocomplete.php?q={enc}",
+                  f"{site}/tag/index.json?name={enc}&order=count&limit=10",
+                  f"{site}/tag.json?name={enc}&order=count&limit=10")
+        for url in routes:
+            try:
+                req = urllib.request.Request(url, headers={**BROWSER_HEADERS, "Accept": "application/json",
+                                                           "Referer": site + "/"})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    data = json.loads(r.read().decode("utf-8", "replace"))
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                data = next((v for v in data.values() if isinstance(v, list)), [])
+            out = []
+            for d in data if isinstance(data, list) else []:
+                if not isinstance(d, dict):
+                    continue
+                name = d.get("value") or d.get("name") or d.get("label")
+                if not name or (d.get("type") not in (None, "tag", "tag_query", 0, "0", "general")
+                                and "post_count" not in d and "count" not in d):
+                    continue
+                count = d.get("post_count", d.get("count"))
+                if count is None:
+                    m = re.search(r"\((\d+)\)\s*$", str(d.get("label", "")))
+                    count = int(m.group(1)) if m else None
+                name = re.sub(r"\s*\(\d+\)\s*$", "", str(name)).strip()
+                try:
+                    count = int(count) if count is not None else None
+                except (TypeError, ValueError):
+                    count = None
+                if name and not query_blocked(name):
+                    out.append({"value": name, "label": f"{cls.label} {name}", "count": count})
+            if out:
+                return out[:10]
+        return []
+
     def _get_bytes(self, url, timeout=30):
         self._wait()
         headers = dict(BROWSER_HEADERS)

@@ -196,3 +196,40 @@ class Suggest(unittest.TestCase):
             raise err(u, 503)
         self.assertEqual(self._run(RedgifsSource, h, "x"), [])
         self.assertEqual(self._run(RedditSource, h, "x"), [])
+
+
+class BooruSuggestAndWait(unittest.TestCase):
+    def test_booru_suggest_tries_routes_until_one_answers(self):
+        import urllib.request as ur
+        from sources.hypnohub_source import HypnohubSource
+        def fake(req, timeout=8):
+            u = req.full_url
+            if "/tag/index.json" in u:
+                return reply(json.dumps([{"name": "cat_ears", "count": 321, "type": 0}]))
+            raise err(u, 404)
+        with mock.patch.object(ur, "urlopen", fake):
+            r = HypnohubSource.suggest("cat ears")
+        self.assertEqual([(m["value"], m["count"]) for m in r], [("cat_ears", 321)])
+
+    def test_booru_suggest_parses_label_counts_and_never_raises(self):
+        import urllib.request as ur
+        from sources.booru_extra_sources import Rule34Source
+        def ok(req, timeout=8):
+            return reply(json.dumps([{"label": "cat_ears (1500)", "value": "cat_ears"}]))
+        with mock.patch.object(ur, "urlopen", ok):
+            self.assertEqual(Rule34Source.suggest("cat")[0]["count"], 1500)
+        def boom(req, timeout=8):
+            raise OSError("down")
+        with mock.patch.object(ur, "urlopen", boom):
+            self.assertEqual(Rule34Source.suggest("cat"), [])
+
+    def test_reddit_rate_limiter_announces_waits(self):
+        from sources.reddit_source import RateLimiter
+        seen = []
+        rl = RateLimiter(min_interval=1.0)
+        rl.notify = lambda m, lvl: seen.append((m, lvl))
+        with mock.patch("sources.reddit_source.time.sleep"):
+            rl.last = __import__("time").time()
+            rl.wait()
+        self.assertEqual(seen[0][1], "wait")
+        self.assertTrue(seen[0][0].startswith("WAIT|"))

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.3
+- Find now covers the booru family (Gelbooru, Realbooru, Hypnohub, Rule34, Safebooru, TBIB, Xbooru): tag lookups with
+  post counts, trying each engine's known autocomplete route.
+- Red flashing dot in the footer while Reddit's rate limit makes the program wait ("not a program fault").
+
 ## v0.1.2
 - **Check all sites** button: one tiny search per site, results window with status, timing and HTTP details.
 - Version number shown in the title bar, Log header and README.

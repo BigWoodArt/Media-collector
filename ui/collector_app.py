@@ -74,6 +74,7 @@ class CollectorApp(tk.Tk):
                               background=theme.PANEL_BG, arrowcolor=theme.CRIMSON, insertcolor=theme.TEXT_FG)
         self.cfg = settings.load()
         self._running_iid = None
+        self._wait_what = ""
         self._limits = {}
         self._done_total = 0
         self.rows = {}                 # tree iid -> Pick (the searches to run)
@@ -124,6 +125,12 @@ class CollectorApp(tk.Tk):
         row.pack(fill="x")
         self.status = ttk.Label(row, text="Ready.", style="Muted.TLabel")
         self.status.pack(side="left")
+        # red flashing dot + note while a site's own rate limit makes us wait (so it's clear it isn't the program)
+        self.wait_lbl = ttk.Label(row, text="", foreground=theme.CRIMSON)
+        self.wait_dot = tk.Canvas(row, width=14, height=14, bg=theme.BG, highlightthickness=0)
+        self.wait_dot.create_oval(2, 2, 12, 12, fill=theme.CRIMSON, outline="", tags="dot")
+        self._wait_until, self._wait_on = 0.0, False
+        self.after(500, self._flash_wait)
         self.start_btn = ttk.Button(row, text="Start", command=self._start)
         self.start_btn.pack(side="right")
         self.stop_btn = ttk.Button(row, text="Stop", command=self._stop, state="disabled")
@@ -863,8 +870,30 @@ class CollectorApp(tk.Tk):
             pass
         self.after(100, self._poll)
 
+    def _flash_wait(self):
+        import time
+        left = self._wait_until - time.time()
+        if left > 0:
+            self._wait_on = not self._wait_on
+            if not self.wait_dot.winfo_manager():
+                self.wait_lbl.pack(side="left", padx=(12, 0))
+                self.wait_dot.pack(side="left", padx=(8, 0), before=self.wait_lbl)
+            self.wait_dot.itemconfig("dot", fill=theme.CRIMSON if self._wait_on else theme.BG)
+            self.wait_lbl.config(text=f"{self._wait_what}: waiting {left:.0f}s - not a program fault")
+        elif self.wait_dot.winfo_manager():
+            self.wait_dot.pack_forget()
+            self.wait_lbl.pack_forget()
+        self.after(500, self._flash_wait)
+
     def _handle(self, ev):
         kind = ev[0]
+        if kind == "log" and ev[2] == "wait":
+            import re, time
+            m = re.search(r"WAIT\|([\d.]+)\|(.*)", ev[1])
+            if m:
+                self._wait_until = time.time() + float(m.group(1))
+                self._wait_what = m.group(2)
+            return
         if kind == "log":
             self._log(ev[1], ev[2])
         elif kind == "progress":

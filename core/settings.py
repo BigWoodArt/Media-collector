@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 APP_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = APP_DIR / "collector_settings.json"
 
