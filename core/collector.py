@@ -407,7 +407,8 @@ def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=8
         with lock:
             for m in found:
                 results.append({"source": sid, "site": cls.label, "value": m["value"],
-                                "label": m.get("label") or m["value"], "count": m.get("count")})
+                                "label": m.get("label") or m["value"], "count": m.get("count"),
+                                "nofilter": bool(m.get("nofilter"))})
 
     threads = [threading.Thread(target=one, args=(sid,), daemon=True) for sid in ids]
     for t in threads:
@@ -420,7 +421,7 @@ def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=8
         if key in seen:
             continue
         seen.add(key)
-        if r["count"] is not None and r["count"] < min_count:
+        if r["count"] is not None and r["count"] < min_count and not r["nofilter"]:
             continue
         out.append(r)
     names = {query.strip().lower().lstrip("#"), query.strip().lower().replace(" ", ""),

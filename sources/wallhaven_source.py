@@ -28,6 +28,24 @@ class WallhavenSource(JsonBoardSource):
     min_score_choices = []
     query_hint = "keywords or tags (e.g. cat girl)"
 
+    @classmethod
+    def suggest(cls, query):
+        """The search word with Wallhaven's own result count (safe-for-work totals; NSFW needs your key, so a
+        zero here is still listed). Never raises."""
+        q = query.strip()
+        if not q:
+            return []
+        entry = {"value": q, "label": f"Wallhaven {q}", "count": None, "nofilter": True}
+        data = cls._suggest_json(f"{cls.base_url}/api/v1/search?" + urllib.parse.urlencode(
+            {"q": q, "purity": "100", "categories": "111"}))
+        try:
+            total = int((data or {}).get("meta", {}).get("total"))
+        except (TypeError, ValueError):
+            return [entry]
+        if total > 0:
+            entry["count"] = total
+        return [entry]
+
     def _page(self, query, cursor):
         page = cursor or 1
         params = {"q": query, "page": page, "categories": "111",

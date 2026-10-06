@@ -6,6 +6,7 @@ import random
 import hashlib
 import urllib.request
 import urllib.error
+import urllib.parse
 
 from sources.base import Source
 from core.media_item import MediaItem
@@ -29,6 +30,29 @@ class SoundgasmSource(Source):
     query_hint = "paste Creator Name here"
     default_limit = 5
     default_randomize = True   # no search here: newest-N every time would be dull
+
+    @classmethod
+    def suggest(cls, query):
+        """Soundgasm has no search, only creator pages: confirm the name exists and count its uploads.
+        No such creator -> not listed; page unreachable -> listed unconfirmed. Never raises."""
+        name = query.strip().lstrip("@")
+        if not name or " " in name:
+            return []
+        entry = {"value": name, "label": f"Soundgasm creator {name}", "count": None, "nofilter": True}
+        try:
+            req = urllib.request.Request(f"https://soundgasm.net/u/{urllib.parse.quote(name)}",
+                                         headers=BROWSER_HEADERS)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                html = r.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as ex:
+            return [] if ex.code == 404 else [entry]
+        except Exception:
+            return [entry]
+        n = len(ENTRY_RE.findall(html))
+        if not n:
+            return []
+        entry["count"] = n
+        return [entry]
 
     def __init__(self):
         self._last_request = 0.0

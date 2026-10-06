@@ -36,6 +36,25 @@ class EromeSource(Source):
     default_order = "hot"
     has_media_priority = True
 
+    @classmethod
+    def suggest(cls, query):
+        """The search word, confirmed by loading the first results page (albums found -> listed; none -> not
+        listed; page unreachable -> listed unconfirmed). No total is shown: Erome doesn't publish one."""
+        q = query.strip()
+        if not q:
+            return []
+        entry = {"value": q, "label": f"Erome {q}", "count": None, "nofilter": True}
+        try:
+            req = urllib.request.Request(f"https://www.erome.com/search?q={urllib.parse.quote(q)}",
+                                         headers=BROWSER_HEADERS)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                html = r.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as ex:
+            return [] if ex.code == 404 else [entry]
+        except Exception:
+            return [entry]
+        return [entry] if ALBUM_LINK_RE.search(html) else []
+
     def __init__(self):
         self._last_request = 0.0
         self.seen_hashes = set()

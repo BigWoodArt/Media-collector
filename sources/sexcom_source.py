@@ -3,7 +3,9 @@ The site is a Next.js app: the first page of results is embedded in the page's o
 its search API (/portal/api/<pictures|gifs>/search). Plain requests, no login; images are public CDN files."""
 import json
 import re
+import urllib.error
 import urllib.parse
+import urllib.request
 
 from sources.json_board import JsonBoardSource, ApiError
 
@@ -50,6 +52,33 @@ class _SexCom(JsonBoardSource):
     def __init__(self, api_key="", user_id=""):
         super().__init__(api_key, user_id)
         self._img_host, self._pages = self.default_img_host, 1
+
+    @classmethod
+    def suggest(cls, query):
+        """One entry for the word, with the site's own result count. The first results page is fetched to confirm
+        something matches: none -> not listed; page unreachable -> listed without a number. Never raises."""
+        q = query.strip()
+        if not q:
+            return []
+        entry = {"value": q, "label": f"{cls.label} {q}", "count": None}
+        try:
+            qs = urllib.parse.urlencode({"search": q})
+            req = urllib.request.Request(f"{cls.base_url}/en/{cls.page_path}?{qs}",
+                                         headers=dict(BROWSER_HEADERS, Accept="text/html"))
+            with urllib.request.urlopen(req, timeout=10) as r:
+                raw = r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as ex:
+            return [] if ex.code == 404 else [entry]
+        except Exception:
+            return [entry]
+        if "Just a moment" in raw[:2000]:
+            return [entry]
+        if not parse_items(raw):
+            return []
+        m = re.search(r'paging\\?":\{\\?"total\\?":(\d+)', raw)
+        if m:
+            entry["count"] = int(m.group(1))
+        return [entry]
 
     def _headers(self):
         return dict(BROWSER_HEADERS, Accept="application/json, text/plain, */*",

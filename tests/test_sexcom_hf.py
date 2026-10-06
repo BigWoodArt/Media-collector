@@ -97,5 +97,76 @@ class HentaiFoundry(unittest.TestCase):
         self.assertEqual(clean_query("hentaifoundry", "https://www.hentai-foundry.com/search/index?query=cat"), "cat")
 
 
+class FindLookups(unittest.TestCase):
+    def _with(self, handler):
+        import urllib.request as ur
+        return mock.patch.object(ur, "urlopen", lambda req, timeout=8: handler(req.full_url))
+
+    def test_sexcom_count_none_and_unreachable(self):
+        from tests._net import reply, err
+        page = RSC.replace('numberOfPages', 'numberOfPages')
+        with self._with(lambda u: reply(page.replace('\\"paging\\":{', '\\"paging\\":{'))):
+            r = SexComPicsSource.suggest("cat")
+        self.assertEqual(r[0]["value"], "cat")
+        with self._with(lambda u: reply("<html>no items</html>")):
+            self.assertEqual(SexComPicsSource.suggest("zzzz"), [])
+        def boom(u):
+            raise OSError("down")
+        with self._with(boom):
+            r = SexComPicsSource.suggest("cat")
+        self.assertEqual((r[0]["value"], r[0]["count"]), ("cat", None))      # unverified but still offered
+
+    def test_sexcom_total_is_read(self):
+        from tests._net import reply
+        page = RSC.replace('\\"paging\\":{\\"total\\":90', '\\"paging\\":{\\"total\\":90')
+        with self._with(lambda u: reply(page)):
+            self.assertEqual(SexComPicsSource.suggest("cat")[0]["count"], 90)
+
+    def test_wallhaven_count_and_fallback(self):
+        from tests._net import reply
+        from sources.wallhaven_source import WallhavenSource
+        with self._with(lambda u: reply(json.dumps({"meta": {"total": 1234}}))):
+            r = WallhavenSource.suggest("cat")
+        self.assertEqual((r[0]["count"], r[0]["nofilter"]), (1234, True))
+        with self._with(lambda u: reply(json.dumps({"meta": {"total": 0}}))):
+            self.assertEqual(WallhavenSource.suggest("cat")[0]["count"], None)   # NSFW may exist: still offered
+        with self._with(lambda u: reply("<html>")):
+            self.assertEqual(len(WallhavenSource.suggest("cat")), 1)
+
+    def test_erome_and_soundgasm_verify_something_exists(self):
+        from tests._net import reply, err
+        from sources.erome_source import EromeSource
+        from sources.soundgasm_source import SoundgasmSource
+        with self._with(lambda u: reply('<a href="https://www.erome.com/a/AbC123">x</a>')):
+            self.assertEqual(EromeSource.suggest("cosplay")[0]["value"], "cosplay")
+        with self._with(lambda u: reply("<html>nothing</html>")):
+            self.assertEqual(EromeSource.suggest("zzzz"), [])
+        page = '<a href="https://soundgasm.net/u/Amy/one">One</a><a href="https://soundgasm.net/u/Amy/two">Two</a>'
+        with self._with(lambda u: reply(page)):
+            r = SoundgasmSource.suggest("Amy")
+        self.assertEqual((r[0]["count"], r[0]["nofilter"]), (2, True))
+
+        def nf(u):
+            raise err(u, 404)
+        with self._with(nf):
+            self.assertEqual(SoundgasmSource.suggest("nobody"), [])
+        self.assertEqual(SoundgasmSource.suggest("two words"), [])
+
+    def test_small_counts_not_hidden_for_nofilter_entries(self):
+        from core.collector import suggest_all
+        from sources import SOURCE_BY_ID
+        from sources.base import Source
+
+        class Tiny(Source):
+            id, label = "tiny", "Tiny"
+
+            @classmethod
+            def suggest(cls, q):
+                return [{"value": "keep", "count": 5, "nofilter": True}, {"value": "drop", "count": 5}]
+        with mock.patch.dict(SOURCE_BY_ID, {"tiny": Tiny}):
+            out = suggest_all("x", source_ids=["tiny"], min_count=100)
+        self.assertEqual([m["value"] for m in out], ["keep"])
+
+
 if __name__ == "__main__":
     unittest.main()

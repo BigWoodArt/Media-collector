@@ -588,7 +588,8 @@ class CollectorApp(tk.Tk):
         self.match_tree.delete(*self.match_tree.get_children())
         shown = 0
         for i, m in enumerate(self.matches):
-            if self.hide_small.get() and m["count"] is not None and m["count"] < MIN_MATCH_SIZE:
+            if (self.hide_small.get() and m["count"] is not None and m["count"] < MIN_MATCH_SIZE
+                    and not m.get("nofilter")):
                 continue
             self.match_tree.insert("", "end", iid=str(i), values=(m["label"], short(m["count"])))
             shown += 1

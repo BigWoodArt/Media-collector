@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.6
+- Find now also covers Sex.com (Pics, GIFs; with the site's result count), Wallhaven (count), Erome and Soundgasm
+  (creator name; upload count). Each lookup loads the first results page to confirm something matches; a site that can't
+  be reached is still listed, just without a number. These entries are exempt from "Hide small".
+
 ## v0.1.5
 - Download progress is now plain text on the bottom line (no second bar, nothing moves). **Skip file** is red and
   active while a run is going, greyed out otherwise; it also works while a file is still waiting for the server.
