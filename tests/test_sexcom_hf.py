@@ -88,6 +88,11 @@ class HentaiFoundry(unittest.TestCase):
         url = s._resolve_url({"id": "101", "path": "/pictures/user/bob/101/First"}, lambda *a: None)
         self.assertEqual(url, "https://pictures.hentai-foundry.com/b/bob/101/x.jpg")
 
+    def test_browser_identity_is_sent_with_the_cookie(self):
+        s = HentaiFoundrySource(cookie="a=b", user_agent="MyBrowser/1.0")
+        for h in (s._headers(), s._download_headers()):
+            self.assertEqual((h["User-Agent"], h["Cookie"]), ("MyBrowser/1.0", "a=b"))
+
     def test_registered_and_cleaned(self):
         from sources import SOURCE_BY_ID
         from core.query_clean import clean_query

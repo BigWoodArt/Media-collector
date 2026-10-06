@@ -1,4 +1,4 @@
-# Media Collector  (v0.1.6)
+# Media Collector  (v0.1.7)
 
 Type a topic, tick the matches, press Start. The program asks each supported site for its own real
 subreddits, tags, communities and creators, downloads what you chose into a themed folder, and shows

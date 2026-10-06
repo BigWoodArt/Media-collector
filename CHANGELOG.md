@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.7
+- Hentai Foundry: Settings now has **Open browser to sign in** / **Save session**. It opens the site in a Chrome/Edge
+  window with its own profile folder (your everyday browser profile is not read); you pass the bot check yourself, then
+  the program reads that window's cookies and user-agent through the browser's local debugging channel
+  (`core/browser_session.py`, `core/miniws.py`) and sends the same ones. Nothing is solved or faked. Pasting a cookie by
+  hand still works.
+
 ## v0.1.6
 - Find now also covers Sex.com (Pics, GIFs; with the site's result count), Wallhaven (count), Erome and Soundgasm
   (creator name; upload count). Each lookup loads the first results page to confirm something matches; a site that can't

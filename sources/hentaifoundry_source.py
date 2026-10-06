@@ -1,7 +1,7 @@
 """Hentai Foundry search.
-The site shows a "making sure you're not a bot" page to scripts. This source does NOT try to get around it: copy the
-Cookie header from your own browser (after you have opened the site there) into Settings. It expires, so paste a
-fresh one when searches stop working. Requests are slow (about 2.5 s apart)."""
+The site shows a "making sure you're not a bot" page to scripts. This source does NOT try to get around it: in
+Settings you open the site in a real browser window, pass the check yourself, and the program reuses that session's
+cookies (see core/browser_session.py). It expires, so repeat when searches stop working. Requests are slow (about 2.5 s apart)."""
 import html
 import re
 import urllib.error
@@ -15,8 +15,9 @@ BROWSER_HEADERS = {
                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
     "Accept-Language": "en-US,en;q=0.9",
 }
-BLOCK_HELP = ("Hentai Foundry's bot check stopped this request. Open the site in your own browser, then copy its "
-              "Cookie header into Settings > Hentai Foundry cookie (it expires, so refresh it when needed).")
+BLOCK_HELP = ("Hentai Foundry's bot check stopped this request. In Settings, use 'Open browser to sign in', pass the "
+              "check in that window, then 'Save session' (it expires, so repeat when it stops working). "
+              "Or paste your browser's Cookie header there by hand.")
 BLOCK_RE = re.compile(r"<div class=['\"]thumb_square['\"]>(.*?)(?=<div class=['\"]thumb_square['\"]>|<div class=['\"]pagebar|$)", re.S)
 LINK_RE = re.compile(r'class="thumbLink" href="(/pictures/user/([^/"]+)/(\d+)[^"]*)"')
 TITLE_RE = re.compile(r'<span title="([^"]*)" class="thumb"')
@@ -54,18 +55,23 @@ class HentaiFoundrySource(JsonBoardSource):
     min_score_choices = []
     order_help = "Results are in the site's own search order."
 
-    def __init__(self, cookie=""):
+    def __init__(self, cookie="", user_agent=""):
         super().__init__()
         self.cookie = cookie.strip()
+        self.ua = user_agent.strip()      # the browser that passed the check; its pass is tied to that identity
 
     def _headers(self):
         h = dict(BROWSER_HEADERS, Accept="text/html,application/xhtml+xml", Referer=BASE + "/")
+        if self.ua:
+            h["User-Agent"] = self.ua
         if self.cookie:
             h["Cookie"] = self.cookie
         return h
 
     def _download_headers(self):
         h = dict(BROWSER_HEADERS, Referer=BASE + "/")
+        if self.ua:
+            h["User-Agent"] = self.ua
         if self.cookie:
             h["Cookie"] = self.cookie
         return h

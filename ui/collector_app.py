@@ -1092,11 +1092,81 @@ class SettingsDialog(tk.Toplevel):
             ttk.Entry(r, textvariable=var, width=40,
                       show="" if arg in ("user_id", "base_url", "instance") else "•").pack(side="left")
             add_help(r, hint, side="left", padx=8)
+        self._build_hf_session(body)
         row = ttk.Frame(body)
         row.pack(fill="x", pady=(12, 0))
         ttk.Button(row, text="Save", command=self._save).pack(side="right")
         ttk.Button(row, text="Cancel", style="Plus.TButton", command=self.destroy).pack(side="right", padx=6)
         self.grab_set()
+
+    # ---- Hentai Foundry: sign in with a real browser window, then reuse that session
+    def _build_hf_session(self, body):
+        from core.browser_session import BrowserSession, find_browser
+        box = ttk.LabelFrame(body, text=" Hentai Foundry session ", padding=8)
+        box.pack(fill="x", pady=(10, 0))
+        ttk.Label(box, text="The site blocks scripts with a bot check. Open it in a browser window, pass the check "
+                            "yourself, then press Save session: the program reuses that window's cookies. Uses its own "
+                            "profile folder; your everyday browser is not read.",
+                  style="Muted.TLabel", wraplength=560, justify="left").pack(anchor="w")
+        r = ttk.Frame(box)
+        r.pack(fill="x", pady=(6, 0))
+        self._hf = BrowserSession(str(settings.APP_DIR / "browser_profile"))
+        self._hf_q = queue.Queue()
+        self.hf_open = ttk.Button(r, text="Open browser to sign in", command=self._hf_open)
+        self.hf_open.pack(side="left")
+        self.hf_save = ttk.Button(r, text="Save session", command=self._hf_save, state="disabled")
+        self.hf_save.pack(side="left", padx=6)
+        self.hf_msg = ttk.Label(r, text="" if find_browser() else "No Chrome/Edge found: paste a cookie above instead.",
+                                style="Muted.TLabel")
+        self.hf_msg.pack(side="left", padx=6)
+        self.after(200, self._hf_poll)
+        self.bind("<Destroy>", lambda e: self._hf.close() if e.widget is self else None)
+
+    def _hf_open(self):
+        self.hf_msg.config(text="Opening the browser...")
+
+        def work():
+            try:
+                self._hf.open("https://www.hentai-foundry.com/")
+                self._hf_q.put(("opened", "Pass the check in the browser window, then press Save session."))
+            except Exception as ex:
+                self._hf_q.put(("error", str(ex)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _hf_save(self):
+        self.hf_msg.config(text="Reading the session...")
+
+        def work():
+            try:
+                cookie, ua = self._hf.grab("hentai-foundry.com")
+                self._hf_q.put(("grabbed", (cookie, ua)))
+            except Exception as ex:
+                self._hf_q.put(("error", str(ex)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _hf_poll(self):
+        try:
+            while True:
+                kind, val = self._hf_q.get_nowait()
+                if kind == "opened":
+                    self.hf_save.config(state="normal")
+                    self.hf_msg.config(text=val)
+                elif kind == "grabbed":
+                    cookie, ua = val
+                    if not cookie:
+                        self.hf_msg.config(text="No cookies yet: finish the check in the browser, then try again.")
+                        continue
+                    self.vars[("hentaifoundry", "cookie")].set(cookie)
+                    self.vars[("hentaifoundry", "user_agent")].set(ua)
+                    self._hf.close()
+                    self.hf_save.config(state="disabled")
+                    self.hf_msg.config(text=f"Session captured ({cookie.count('=')} cookie(s)). Press Save to keep it.")
+                else:
+                    self.hf_msg.config(text=val)
+        except queue.Empty:
+            pass
+        if self.winfo_exists():
+            self.after(200, self._hf_poll)
 
     def _browse(self):
         d = filedialog.askdirectory(parent=self, initialdir=self.out_var.get())
