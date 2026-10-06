@@ -14,14 +14,17 @@ from sources.danbooru_source import DanbooruSource
 from sources.moebooru_sources import YandereSource, KonachanSource
 from sources.derpibooru_source import DerpibooruSource
 from sources.wallhaven_source import WallhavenSource
-from sources.civitai_source import CivitaiSource
+from sources.civitai_source import CivitaiSource   # kept for later; see DISABLED below
 from sources.lemmy_source import LemmySource
 
 SOURCE_CLASSES = [RedditSource, RedgifsSource, SoundgasmSource, FreesoundSource, EromeSource,
                   GelbooruSource, RealbooruSource, HypnohubSource,
                   Rule34Source, SafebooruSource, TbibSource, XbooruSource,
                   E621Source, DanbooruSource, YandereSource, KonachanSource, DerpibooruSource,
-                  WallhavenSource, CivitaiSource, LemmySource]
+                  WallhavenSource, LemmySource]
+# Civitai is switched off: its image search has been down for maintenance and its public search returns
+# models, not tagged images. Add CivitaiSource back to SOURCE_CLASSES when image search returns.
+DISABLED_SOURCE_CLASSES = [CivitaiSource]
 SOURCE_BY_LABEL = {c.label: c for c in SOURCE_CLASSES}
 SOURCE_LABELS = [c.label for c in SOURCE_CLASSES]
 SOURCE_BY_ID = {c.id: c for c in SOURCE_CLASSES}

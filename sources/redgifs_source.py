@@ -88,6 +88,27 @@ class RedgifsSource(Source):
             log(f"[Redgifs] failed to get guest token: {ex}", "error")
         return self._token
 
+    @classmethod
+    def suggest(cls, query):
+        """Redgifs' own tag names for a word, with how many clips carry each (the same lookup the scraper uses)."""
+        q = query.strip().lstrip("#")
+        if not q:
+            return []
+        try:
+            inst = cls()
+            token = inst._get_token(lambda *a, **k: None)
+            if not token:
+                return []
+            raw = inst._get_text("https://api.redgifs.com/v2/search/suggest?" + urllib.parse.urlencode({"query": q}),
+                                 extra_headers={"Authorization": f"Bearer {token}"})
+            data = json.loads(raw)
+        except Exception:
+            return []
+        if isinstance(data, dict):
+            data = next((v for v in data.values() if isinstance(v, list)), [])
+        return [{"value": d["text"], "label": f"Redgifs {d['text']}", "count": d.get("gifs")}
+                for d in data if isinstance(d, dict) and d.get("text")]
+
     # ---- keyword -> Redgifs' own tag names
     def _resolve_tags(self, text, token, log):
         """'hypno' -> ['Hypno'].  Comma-separated input means several tags."""

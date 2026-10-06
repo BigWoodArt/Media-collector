@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 
+APP_VERSION = "0.2.0"
 APP_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = APP_DIR / "collector_settings.json"
 
@@ -18,8 +19,6 @@ CRED_FIELDS = [
     ("rule34", "user_id", "Rule34 user ID", "Optional. Both ID and key together enable the faster API."),
     ("rule34", "api_key", "Rule34 API key", "Optional."),
     ("wallhaven", "api_key", "Wallhaven API key", "Free, from account settings. Needed for NSFW results."),
-    ("civitai", "api_key", "Civitai API key", "Required. civitai.red needs a login API key."),
-    ("civitai", "base_url", "Civitai address", "Default https://civitai.red. Change only if the site moves."),
     ("lemmy", "api_key", "Lemmy login token", "Your account's JWT. Needed to see NSFW posts."),
     ("lemmy", "instance", "Lemmy home instance", "e.g. lemmy.world - where your account lives."),
     ("freesound", "api_key", "Freesound API key", "Free, from freesound.org/apiv2/apply."),

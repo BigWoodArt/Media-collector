@@ -4,7 +4,8 @@ from sources.json_board import JsonBoardSource, ApiError
 
 
 class CivitaiSource(JsonBoardSource):
-    """Civitai public REST API (/api/v1/images). Query: 'user:NAME', 'model:ID', or a model name to search.
+    """DISABLED (not in SOURCE_CLASSES): image search is down upstream, and search-by-name finds models, not tagged images.
+    Civitai public REST API (/api/v1/images). Query: 'user:NAME', 'model:ID', or a model name to search.
     Mature content needs an API key. civitai.red serves mature content and needs a login API key."""
     id, label = "civitai", "Civitai"
     category = "AI art"

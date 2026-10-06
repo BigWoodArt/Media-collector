@@ -2,7 +2,11 @@
 import json
 import unittest
 
+from unittest import mock
+
 from tests._net import fetch, reply, err
+from sources import SOURCE_BY_ID, SOURCE_CLASSES
+from sources.civitai_source import CivitaiSource
 from core.safety import is_blocked, query_blocked
 
 
@@ -81,6 +85,11 @@ class Boards(unittest.TestCase):
         self.assertEqual([i.post_id for i in items], ["wh_a1", "wh_b2"])
         self.assertTrue(any("purity=011" in u for u in urls))
 
+    def test_civitai_is_disabled_in_the_app(self):
+        self.assertNotIn("civitai", SOURCE_BY_ID)
+        self.assertNotIn(CivitaiSource, SOURCE_CLASSES)
+
+    @mock.patch.dict(SOURCE_BY_ID, {"civitai": CivitaiSource})
     def test_civitai_user_cursor_and_prompt_guard(self):
         pg1 = {"items": [{"id": 1, "url": "https://c/1.jpeg", "meta": {"prompt": "a cat"}},
                          {"id": 2, "url": "https://c/2.jpeg", "meta": {"prompt": "young girl"}}],
@@ -94,6 +103,7 @@ class Boards(unittest.TestCase):
         self.assertEqual([i.post_id for i in items], ["cv_1", "cv_3"])
         self.assertTrue(any("username=someone" in u for u in urls))
 
+    @mock.patch.dict(SOURCE_BY_ID, {"civitai": CivitaiSource})
     def test_civitai_model_name_lookup(self):
         def h(u):
             if "api/v1/models" in u:
@@ -105,6 +115,7 @@ class Boards(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertTrue(any("modelId=42" in u for u in urls))
 
+    @mock.patch.dict(SOURCE_BY_ID, {"civitai": CivitaiSource})
     def test_civitai_requires_key(self):
         items, urls, log, *_ = self.run_site("civitai", lambda u: reply("{}"), query="user:x")
         self.assertEqual((items, urls), ([], []))
@@ -138,3 +149,56 @@ class Boards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Suggest(unittest.TestCase):
+    """suggest() lookups, with the network faked at urlopen."""
+
+    def _run(self, cls, handler, query):
+        import urllib.request as ur
+        def fake(req, timeout=8):
+            return handler(getattr(req, "full_url", str(req)))
+        with mock.patch.object(ur, "urlopen", fake):
+            return cls.suggest(query)
+
+    def test_reddit_exact_match_comes_first_then_search(self):
+        from sources.reddit_source import RedditSource
+        def h(u):
+            if "/r/catears/about.json" in u:
+                return reply(json.dumps({"kind": "t5", "data": {"display_name": "catears", "subscribers": 900}}))
+            if "/r/cat_ears/about.json" in u:
+                raise err(u, 404)
+            if "subreddits/search" in u:
+                return reply(json.dumps({"data": {"children": [
+                    {"data": {"display_name": "catgirls", "subscribers": 400000}},
+                    {"data": {"display_name": "CatEars", "subscribers": 900}}]}}))
+            raise err(u, 404)
+        r = self._run(RedditSource, h, "cat ears")
+        self.assertEqual([m["value"] for m in r], ["catears", "catgirls"])   # exact first, deduped
+
+    def test_reddit_no_such_subreddit_falls_back_to_search(self):
+        from sources.reddit_source import RedditSource
+        def h(u):
+            if "about.json" in u:
+                raise err(u, 404)
+            return reply(json.dumps({"data": {"children": [{"data": {"display_name": "x", "subscribers": 5}}]}}))
+        self.assertEqual([m["value"] for m in self._run(RedditSource, h, "zzzz")], ["x"])
+
+    def test_redgifs_tag_suggestions(self):
+        from sources.redgifs_source import RedgifsSource
+        def h(u):
+            if "auth/temporary" in u:
+                return reply(json.dumps({"token": "T"}))
+            if "search/suggest" in u:
+                return reply(json.dumps([{"text": "Hypno", "gifs": 5200}, {"text": "Hypnosis", "gifs": 800}]))
+            raise err(u, 404)
+        r = self._run(RedgifsSource, h, "hypno")
+        self.assertEqual([(m["value"], m["count"]) for m in r], [("Hypno", 5200), ("Hypnosis", 800)])
+
+    def test_suggest_never_raises_when_the_site_is_down(self):
+        from sources.redgifs_source import RedgifsSource
+        from sources.reddit_source import RedditSource
+        def h(u):
+            raise err(u, 503)
+        self.assertEqual(self._run(RedgifsSource, h, "x"), [])
+        self.assertEqual(self._run(RedditSource, h, "x"), [])

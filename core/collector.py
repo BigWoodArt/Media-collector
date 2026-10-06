@@ -5,6 +5,8 @@ import json
 import os
 import queue
 import threading
+import time
+import traceback
 import zipfile
 from dataclasses import dataclass, field
 
@@ -20,10 +22,24 @@ MANIFEST = "collection.json"
 class Pick:
     source_id: str
     value: str          # exactly what is typed into that site's search (tag, subreddit, creator, ...)
-    label: str = ""     # display text for the chip
+    label: str = ""     # display text
+    quality: str = ""   # Any / Good / Best; "" = the job's default
+    limit: int = 0      # items to fetch; 0 = the job's default
 
     def key(self):
         return (self.source_id, self.value.strip().lower())
+
+    def to_dict(self):
+        return {"source": self.source_id, "value": self.value, "label": self.label,
+                "quality": self.quality, "limit": self.limit}
+
+    @classmethod
+    def from_dict(cls, d):
+        try:
+            return cls(str(d["source"]), str(d["value"]), str(d.get("label", "")),
+                       str(d.get("quality", "")), int(d.get("limit", 0) or 0))
+        except (KeyError, TypeError, ValueError):
+            return None
 
 
 @dataclass
@@ -44,6 +60,7 @@ class Collection:
         self.dir = os.path.join(root, safe_name(name, "collection"))
         self.seen = set()
         self.rejected = set()
+        self.picks = []          # saved searches (list of Pick), so a collection reopens as you left it
         self._lock = threading.Lock()
         self._load()
 
@@ -56,13 +73,15 @@ class Collection:
                 data = json.load(f)
             self.seen = set(data.get("seen", []))
             self.rejected = set(data.get("rejected", []))
-        except (OSError, ValueError):
+            self.picks = [p for p in (Pick.from_dict(d) for d in data.get("picks", [])) if p]
+        except (OSError, ValueError, AttributeError, TypeError):
             pass
 
     def save(self):
         os.makedirs(self.dir, exist_ok=True)
         with self._lock:
-            payload = {"seen": sorted(self.seen), "rejected": sorted(self.rejected)}
+            payload = {"seen": sorted(self.seen), "rejected": sorted(self.rejected),
+                       "picks": [p.to_dict() for p in self.picks]}
         tmp = self._path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
@@ -155,7 +174,9 @@ class Job:
             self._emit("pick_done", pick, 0, "failed", "unknown site")
             return
         opts = self.options
-        resolved = cls.resolve_quality(opts.quality) if cls.supports_quality else {}
+        quality = pick.quality or opts.quality
+        limit = pick.limit or opts.limit
+        resolved = cls.resolve_quality(quality) if cls.supports_quality else {}
         sort = (opts.sort or resolved.get("sort") or None) if cls.has_sort else None
         time_range = (opts.time_range or resolved.get("time_range") or None) if cls.has_sort else None
         query = pick.value
@@ -165,13 +186,16 @@ class Job:
         dest = os.path.join(self.collection.dir, safe_name(cls.label), safe_name(pick.value)[:40])
         os.makedirs(dest, exist_ok=True)
         creds = self.credentials.get(pick.source_id) or {}
+        self._emit("log", f"[{label}] START quality={quality} limit={limit} -> query={query!r} sort={sort} "
+                          f"time={time_range} shuffle={opts.randomize} types={sorted(opts.types)} "
+                          f"credentials_set={sorted(creds)} dest={dest}", "debug")
         try:
             source = cls(**creds) if creds else cls()
         except TypeError as ex:
             self._emit("pick_done", pick, 0, "failed", f"bad settings for this site: {ex}")
             return
 
-        errors, kept = [], []
+        errors, kept, skipped = [], [], {"error_page": 0, "type": 0}
 
         def log_cb(msg, level="info"):
             if level == "error":
@@ -183,37 +207,54 @@ class Job:
 
         def item_cb(item):
             if looks_like_error_page(item.file_path):
-                log_cb("discarded a download that was an error page, not a real file", "warning")
+                skipped["error_page"] += 1
+                log_cb(f"discarded {os.path.basename(item.file_path)}: an error page, not a real file", "warning")
                 _rm(item.file_path)
                 return
             if item.media_type not in opts.types:
+                skipped["type"] += 1
+                self._emit("log", f"[{label}] dropped {item.post_id} ({item.media_type} not selected)", "debug")
                 _rm(item.file_path)
                 self.collection.mark_seen(item.post_id)     # don't re-download a type you excluded
                 return
             self.collection.mark_seen(item.post_id)
             kept.append(item)
             self.total += 1
+            self._emit("log", f"[{label}] kept {item.post_id} {item.media_type} "
+                              f"{os.path.getsize(item.file_path)} bytes -> {item.file_path}", "debug")
             self._emit("item", pick, item, make_thumb(item.file_path, item.media_type))
 
-        netlog.begin([])
+        http = []
+        netlog.begin(http)
         status, detail = "done", ""
+        started = time.time()
         try:
-            source.fetch(query, opts.limit, sort, time_range, dest, log_cb, progress_cb,
-                         CombinedStop(self.stop_event), None, opts.randomize,
-                         False,
+            source.fetch(query, limit, sort, time_range, dest, log_cb, progress_cb,
+                         CombinedStop(self.stop_event), None, opts.randomize, False,
                          item_cb=item_cb, skip_ids=self.collection.skip_ids())
         except Exception as ex:                     # a broken site must not stop the other picks
             status, detail = "failed", f"{type(ex).__name__}: {ex}"
-            self._emit("log", f"[{label}] CRITICAL: {detail}", "error")
+            self._emit("log", f"[{label}] CRITICAL: {detail}\n{traceback.format_exc()}", "error")
         finally:
             netlog.end()
+        for h in http:
+            line = f"HTTP {h.get('status')} {h.get('ms')}ms {h.get('url')}"
+            if h.get("retry"):
+                line += f" (retry {h['retry']})"
+            if h.get("error"):
+                line += f" ERROR {h['error']}"
+            if h.get("body") and (h.get("status") not in (200, 206) or h.get("error")):
+                line += f" body={h['body'][:200]!r}"
+            self._emit("log", f"[{label}] {line}", "debug")
         if status == "done":
-            if self.stop_event.is_set() and len(kept) < opts.limit:
+            if self.stop_event.is_set() and len(kept) < limit:
                 status = "stopped"
             elif not kept and errors:
                 status, detail = "failed", errors[-1]
             elif not kept:
                 status, detail = "empty", "nothing new matched"
+        self._emit("log", f"[{label}] END status={status} kept={len(kept)} skipped={skipped} "
+                          f"http_calls={len(http)} seconds={time.time() - started:.1f}", "debug")
         self.collection.save()
         self._emit("pick_done", pick, len(kept), status, detail)
 
@@ -225,9 +266,10 @@ def _rm(path):
         pass
 
 
-def suggest_all(query, source_ids=None, timeout=10.0):
-    """Ask every site that supports it for real matches. Returns [{"source": id, "site": label, "value", "label", "count"}].
-    Runs the lookups in parallel; a slow or broken site just contributes nothing."""
+def suggest_all(query, source_ids=None, timeout=10.0, min_count=0, max_results=80):
+    """Ask every site that supports it for real matches. Returns the most popular first across ALL sites:
+    [{"source": id, "site": label, "value", "label", "count"}]. Matches with a known size under min_count are
+    dropped; matches with no known size go last. A slow or broken site just contributes nothing."""
     ids = source_ids or list(SOURCE_BY_ID)
     results, lock = [], threading.Lock()
 
@@ -247,6 +289,14 @@ def suggest_all(query, source_ids=None, timeout=10.0):
         t.start()
     for t in threads:
         t.join(timeout)
-    order = {sid: i for i, sid in enumerate(ids)}
-    results.sort(key=lambda r: (order[r["source"]], -(r["count"] or 0)))
-    return results
+    seen, out = set(), []
+    for r in results:
+        key = (r["source"], str(r["value"]).lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        if r["count"] is not None and r["count"] < min_count:
+            continue
+        out.append(r)
+    out.sort(key=lambda r: (r["count"] is None, -(r["count"] or 0)))
+    return out[:max_results]

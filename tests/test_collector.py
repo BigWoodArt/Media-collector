@@ -148,3 +148,52 @@ class CollectorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersistenceAndRanking(unittest.TestCase):
+    def test_saved_searches_round_trip_with_quality_and_limit(self):
+        tmp = tempfile.mkdtemp()
+        c = Collection(tmp, "Cats")
+        c.picks = [Pick("fake", "cat", "Fake cat", "Best", 25), Pick("fake", "dog")]
+        c.save()
+        again = Collection(tmp, "Cats")
+        self.assertEqual([(p.value, p.quality, p.limit) for p in again.picks], [("cat", "Best", 25), ("dog", "", 0)])
+
+    def test_per_search_quality_and_limit_win_over_defaults(self):
+        tmp = tempfile.mkdtemp()
+        FakeSource.calls = []
+        with mock.patch.dict(SOURCE_BY_ID, {"fake": FakeSource}):
+            job = Job(Collection(tmp, "C"), [Pick("fake", "a", quality="Best"), Pick("fake", "b")],
+                      Options(quality="Any", limit=9))
+            drain(job)
+        self.assertEqual(FakeSource.calls, ["a score:>=9", "b"])
+
+    def test_matches_sorted_by_popularity_across_sites_with_floor(self):
+        class A(FakeSource):
+            id, label = "a", "A"
+            @classmethod
+            def suggest(cls, q):
+                return [{"value": "small", "count": 12}, {"value": "mid", "count": 5000}, {"value": "nosize"}]
+        class B(FakeSource):
+            id, label = "b", "B"
+            @classmethod
+            def suggest(cls, q):
+                return [{"value": "big", "count": 900000}, {"value": "mid", "count": 5000}]
+        with mock.patch.dict(SOURCE_BY_ID, {"a": A, "b": B}):
+            r = suggest_all("x", ["a", "b"], min_count=100)
+        self.assertEqual([(m["source"], m["value"]) for m in r],
+                         [("b", "big"), ("a", "mid"), ("b", "mid"), ("a", "nosize")])
+
+    def test_verbose_log_has_start_http_and_end_lines_and_no_secrets(self):
+        tmp = tempfile.mkdtemp()
+
+        class Keyed(FakeSource):
+            def __init__(self, api_key=""):
+                self.api_key = api_key
+        with mock.patch.dict(SOURCE_BY_ID, {"fake": Keyed}):
+            job = Job(Collection(tmp, "C"), [Pick("fake", "a")], Options(), {"fake": {"api_key": "SECRETKEY"}})
+            ev = drain(job)
+        text = "\n".join(str(e[1]) for e in ev if e[0] == "log")
+        self.assertIn("START", text)
+        self.assertIn("END status=", text)
+        self.assertNotIn("SECRETKEY", text)

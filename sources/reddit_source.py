@@ -46,17 +46,39 @@ class RedditSource(Source):
 
     @classmethod
     def suggest(cls, query):
-        import json, urllib.parse, urllib.request
-        qs = urllib.parse.urlencode({"q": query.strip(), "limit": 8, "include_over_18": "on", "sort": "relevance"})
-        try:
-            req = urllib.request.Request(f"https://www.reddit.com/subreddits/search.json?{qs}",
-                                         headers={"User-Agent": "MediaCollector/0.2"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                kids = json.loads(r.read().decode("utf-8", "replace"))["data"]["children"]
-        except Exception:
+        """Real subreddits: an exact-name match first (if r/<query> exists), then Reddit's own search."""
+        import json, re, urllib.parse, urllib.request
+        q = query.strip().lstrip("/").removeprefix("r/")
+        if not q:
             return []
-        return [{"value": k["data"]["display_name"], "label": f"Reddit r/{k['data']['display_name']}",
-                 "count": k["data"].get("subscribers")} for k in kids if k.get("data")]
+        headers = {"User-Agent": "MediaCollector/0.2"}
+
+        def get(url):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=8) as r:
+                    return json.loads(r.read().decode("utf-8", "replace"))
+            except Exception:
+                return None
+
+        out, seen = [], set()
+
+        def add(d):
+            name = d.get("display_name")
+            if name and name.lower() not in seen and not d.get("quarantine"):
+                seen.add(name.lower())
+                out.append({"value": name, "label": f"Reddit r/{name}", "count": d.get("subscribers")})
+
+        # exact: "cat ears" -> r/catears / r/cat_ears
+        for guess in dict.fromkeys([re.sub(r"\s+", "", q), re.sub(r"\s+", "_", q)]):
+            if re.fullmatch(r"[A-Za-z0-9_]{2,21}", guess):
+                data = get(f"https://www.reddit.com/r/{guess}/about.json")
+                if isinstance(data, dict) and data.get("kind") == "t5" and data.get("data"):
+                    add(data["data"])
+        qs = urllib.parse.urlencode({"q": q, "limit": 10, "include_over_18": "on", "sort": "relevance"})
+        found = get(f"https://www.reddit.com/subreddits/search.json?{qs}")
+        for k in ((found or {}).get("data") or {}).get("children") or []:
+            add(k.get("data") or {})
+        return out
 
     @classmethod
     def resolve_quality(cls, quality):
