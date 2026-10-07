@@ -16,7 +16,7 @@ from core import netlog
 from core.thumbs import looks_like_error_page, make_thumb
 from core.util import safe_name
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 
 netlog.install()      # log every HTTP call, retry transient errors, make downloads stoppable/skippable
 from sources import SOURCE_BY_ID, SOURCE_CLASSES
@@ -304,6 +304,7 @@ class Job:
             self._emit("pick_done", pick, 0, "failed", f"bad settings for this site: {ex}")
             return
 
+        source.wanted_types = set(types)        # sources that can, skip unwanted types BEFORE downloading
         errors, kept, skipped = [], [], {"error_page": 0, "type": 0, "duplicate": 0}
 
         def log_cb(msg, level="info"):
@@ -430,7 +431,61 @@ def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=8
     return out[:max_results]
 
 
-def check_sites(credentials=None, on_result=None, stop_event=None, workers=6):
+SAMPLE_MAX_BYTES = 30 * 1024 * 1024
+SAMPLE_SECONDS = 20.0
+
+
+def _fetch_sample_image(source, item, dest_dir, stop_event):
+    """Site check normally only probes a media URL. For an IMAGE result, really download it (up to 30 MB) so the
+    results window can show it. Returns the saved path or raises. Videos stay placeholders."""
+    import urllib.request
+    from urllib.parse import urlparse
+    url = item.extra.get("probe_url") or item.extra.get("original_url") or ""
+    if not url:
+        raise ValueError("no media URL to fetch")
+    ext = os.path.splitext(urlparse(url).path)[1].lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+        ext = ".jpg"
+    path = os.path.join(dest_dir, "sample" + ext)
+    if hasattr(source, "_get_media"):               # Kemono/Coomer: knows its file servers and preview fallback
+        data, _ = source._get_media(url, item.attribution or source.root + "/")
+    else:
+        headers = {}
+        if hasattr(source, "_download_headers"):
+            try:
+                headers = dict(source._download_headers())
+            except Exception:
+                headers = {}
+        origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}/"
+        headers.setdefault("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                          "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+        headers.setdefault("Referer", item.attribution or getattr(source, "base_url", "") or origin)
+        headers.pop("Range", None)
+        end, chunks, total = time.time() + SAMPLE_SECONDS, [], 0
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=10) as resp:
+            while True:
+                if stop_event.is_set() or time.time() > end:
+                    raise TimeoutError("sample download cut off")
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > SAMPLE_MAX_BYTES:
+                    raise ValueError("image over 30 MB - shown as a placeholder")
+        data = b"".join(chunks)
+    if not data or looks_like_error_page_bytes(data):
+        raise ValueError("the server sent a web page, not an image")
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
+def looks_like_error_page_bytes(data):
+    return data[:16].lstrip().lower().startswith((b"<!doctype", b"<html", b"<head", b"<body", b"<?xml", b"{", b"["))
+
+
+def check_sites(credentials=None, on_result=None, stop_event=None, workers=10):
     """One tiny harmless search (limit 1) per site: which sources answer right now?
     Returns (results, temp_dir). Each result: {"id","label","result": ok|empty|fail|stopped, "elapsed",
     "detail","http","item","thumb"}. on_result(result) is called from worker threads as each site finishes."""
@@ -438,6 +493,7 @@ def check_sites(credentials=None, on_result=None, stop_event=None, workers=6):
     stop_event = stop_event or threading.Event()
     root = tempfile.mkdtemp(prefix="mc_sitecheck_")
     results = []
+    live = {}               # site id -> (http list, messages list, start time): lets a timed-out site still report
 
     def one(cls):
         res = {"id": cls.id, "label": cls.label, "query": cls.check_query, "result": "fail", "elapsed": 0.0,
@@ -448,45 +504,112 @@ def check_sites(credentials=None, on_result=None, stop_event=None, workers=6):
         dest = os.path.join(root, safe_name(cls.id))
         os.makedirs(dest, exist_ok=True)
         creds = credentials.get(cls.id) or {}
-        errors, items, http = [], [], []
+        messages, items, http = [], [], []
         started = time.time()
+        live[cls.id] = (http, messages, started)
+        site_timeout = threading.Event()
+        timer = threading.Timer(float(getattr(cls, "check_timeout", 12.0)), site_timeout.set)   # cut a stuck site
+        timer.daemon = True
+        timer.start()
         netlog.begin(http)
+        netlog.set_site_check(True, site_timeout)
         try:
             source = cls(**creds) if creds else cls()
+            # Sources that understand the site-check flag probe the first
+            # media URL instead of downloading the entire file. Older sources
+            # keep their normal behavior, but all HTTP calls are still capped
+            # by netlog's short site-check timeout.
+            source._site_check = True
             resolved = cls.resolve("", "")
-            source.fetch(add_tokens(cls.check_query, resolved.get("query_suffix", "")), 1,
+            fetched = source.fetch(add_tokens(cls.check_query, resolved.get("query_suffix", "")), 1,
                          resolved.get("sort"), resolved.get("time_range"), dest,
-                         lambda m, lvl="info": errors.append(m) if lvl == "error" else None,
-                         lambda *a: None, CombinedStop(stop_event), None, False, False,
+                         lambda m, lvl="info": messages.append((lvl, str(m))),
+                         lambda *a: None, CombinedStop(stop_event, site_timeout), None, False, False,
                          item_cb=items.append, skip_ids=set())
+            # A few older site-check branches return their probe item without
+            # calling item_cb. Keep the checker compatible with both styles.
+            if not items and fetched:
+                items.extend(fetched)
         except Exception as ex:
             res["detail"] = f"{type(ex).__name__}: {ex}"
         finally:
+            timer.cancel()
+            site_timeout.set()
+            netlog.clear_site_check()
             netlog.end()
         res["elapsed"], res["http"] = round(time.time() - started, 1), http
-        good = [i for i in items if not looks_like_error_page(i.file_path)]
+        res["messages"] = [f"{lvl}: {m}" for lvl, m in messages]
+        good = [i for i in items if i.extra.get("site_check") or not looks_like_error_page(i.file_path)]
         if good:
             res["result"], res["item"] = "ok", good[0]
-            res["thumb"] = make_thumb(good[0].file_path, good[0].media_type)
+            it = good[0]
+            if it.media_type == "image" and not (it.file_path and os.path.exists(it.file_path)) \
+                    and not stop_event.is_set():
+                try:
+                    it.file_path = _fetch_sample_image(source, it, dest, stop_event)
+                except Exception as ex:
+                    res["messages"].append(f"info: sample image not shown: {type(ex).__name__}: {ex}")
+            if good[0].file_path:
+                res["thumb"] = make_thumb(good[0].file_path, good[0].media_type)
         elif stop_event.is_set():
             res["result"] = "stopped"
-        elif res["detail"] or errors:
-            res["detail"] = res["detail"] or errors[-1]
+        elif res["detail"] or messages:
+            # Preserve the source's own explanation in Site Check Results.
+            # Prefer an error, otherwise the last warning/info emitted.
+            errs = [m for lvl, m in messages if lvl == "error"]
+            # An error wins; otherwise show the last few messages (the final "0 item(s) collected" line alone
+            # hides why: guard skips, probe failures, empty pages).
+            res["detail"] = res["detail"] or (errs[-1] if errs else " | ".join(m for _, m in messages[-3:]))
         else:
             res["result"], res["detail"] = "empty", "answered, but nothing matched"
         return res
 
     def wrapped(cls):
         r = one(cls)
-        results.append(r)
-        if on_result:
-            try:
-                on_result(r)
-            except Exception:
-                pass
-        return r
+        return cls, r
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(wrapped, SOURCE_CLASSES))
+    ex = ThreadPoolExecutor(max_workers=workers)
+    futures = {ex.submit(wrapped, cls): cls for cls in SOURCE_CLASSES}
+    pending = set(futures)
+    # A site check is a diagnostic, not a collection job. No individual site
+    # gets to hold the entire test hostage. 12 seconds also leaves enough room
+    # for a slow API plus one media probe.
+    limits = {c.id: float(getattr(c, "check_timeout", 12.0)) for c in SOURCE_CLASSES}
+    deadline = time.time() + (max(limits.values(), default=12.0) + SAMPLE_SECONDS) * max(1, (len(SOURCE_CLASSES) + workers - 1) // workers)
+    try:
+        while pending and time.time() < deadline:
+            done, pending = wait(pending, timeout=0.25)
+            for fut in done:
+                cls = futures[fut]
+                try:
+                    _, r = fut.result()
+                except Exception as ex2:
+                    r = {"id": cls.id, "label": cls.label, "query": cls.check_query,
+                         "result": "fail", "elapsed": 0.0, "detail": f"{type(ex2).__name__}: {ex2}",
+                         "http": [], "item": None, "thumb": None}
+                results.append(r)
+                if on_result:
+                    try:
+                        on_result(r)
+                    except Exception:
+                        pass
+        # Anything still running gets a clean per-source stop signal.
+        for fut in pending:
+            cls = futures[fut]
+            http, msgs, t0 = live.get(cls.id, ([], [], time.time()))
+            r = {"id": cls.id, "label": cls.label, "query": cls.check_query,
+                 "result": "stopped", "elapsed": round(time.time() - t0, 1),
+                 "detail": f"site check exceeded the {limits.get(cls.id, 12.0):.0f}-second limit"
+                           + (f" (last: {msgs[-1][1]})" if msgs else ""),
+                 "http": list(http), "messages": [f"{l}: {m}" for l, m in msgs], "item": None, "thumb": None}
+            results.append(r)
+            if on_result:
+                try:
+                    on_result(r)
+                except Exception:
+                    pass
+            fut.cancel()
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     results.sort(key=lambda r: r["label"].lower())
     return results, root

@@ -821,8 +821,16 @@ class CollectorApp(tk.Tk):
             self._log(f"site check {r['label']}: {r['result']} in {r['elapsed']}s {r['detail']}".rstrip(),
                       "error" if r["result"] == "fail" else "debug")
             for h in r["http"]:
-                self._log(f"site check {r['label']}: HTTP {h.get('status')} {h.get('ms')}ms {h.get('url')}"
-                          + (f" ERROR {h['error']}" if h.get("error") else ""), "debug")
+                line = f"site check {r['label']}: HTTP {h.get('status')} {h.get('ms')}ms {h.get('url')}"
+                if h.get("retry"):
+                    line += f" retry={h['retry']}"
+                if h.get("error"):
+                    line += f" ERROR {h['error']}"
+                if h.get("body"):
+                    line += f" body={h['body'][:300]!r}"
+                self._log(line, "debug")
+            if r.get("detail"):
+                self._log(f"site check {r['label']}: detail: {r['detail']}", "debug")
             return
         _, results, tmp = ev
         self._check_stop = None
@@ -1091,82 +1099,108 @@ class SettingsDialog(tk.Toplevel):
             self.vars[(site, arg)] = var
             ttk.Entry(r, textvariable=var, width=40,
                       show="" if arg in ("user_id", "base_url", "instance") else "•").pack(side="left")
+            if (site, arg) == ("hentaifoundry", "cookie"):
+                self.hf_btn = ttk.Button(r, text="Connect browser", command=self._connect_hf)
+                self.hf_btn.pack(side="left", padx=(6, 0))
+            if (site, arg) == ("rule34", "cookie"):
+                self.r34_btn = ttk.Button(r, text="Connect browser", command=self._connect_rule34)
+                self.r34_btn.pack(side="left", padx=(6, 0))
             add_help(r, hint, side="left", padx=8)
-        self._build_hf_session(body)
+        self.status_var = tk.StringVar()
+        ttk.Label(body, textvariable=self.status_var, style="Muted.TLabel", wraplength=560).pack(anchor="w", pady=(6, 0))
         row = ttk.Frame(body)
         row.pack(fill="x", pady=(12, 0))
         ttk.Button(row, text="Save", command=self._save).pack(side="right")
         ttk.Button(row, text="Cancel", style="Plus.TButton", command=self.destroy).pack(side="right", padx=6)
         self.grab_set()
 
-    # ---- Hentai Foundry: sign in with a real browser window, then reuse that session
-    def _build_hf_session(self, body):
-        from core.browser_session import BrowserSession, find_browser
-        box = ttk.LabelFrame(body, text=" Hentai Foundry session ", padding=8)
-        box.pack(fill="x", pady=(10, 0))
-        ttk.Label(box, text="The site blocks scripts with a bot check. Open it in a browser window, pass the check "
-                            "yourself, then press Save session: the program reuses that window's cookies. Uses its own "
-                            "profile folder; your everyday browser is not read.",
-                  style="Muted.TLabel", wraplength=560, justify="left").pack(anchor="w")
-        r = ttk.Frame(box)
-        r.pack(fill="x", pady=(6, 0))
-        self._hf = BrowserSession(str(settings.APP_DIR / "browser_profile"))
-        self._hf_q = queue.Queue()
-        self.hf_open = ttk.Button(r, text="Open browser to sign in", command=self._hf_open)
-        self.hf_open.pack(side="left")
-        self.hf_save = ttk.Button(r, text="Save session", command=self._hf_save, state="disabled")
-        self.hf_save.pack(side="left", padx=6)
-        self.hf_msg = ttk.Label(r, text="" if find_browser() else "No Chrome/Edge found: paste a cookie above instead.",
-                                style="Muted.TLabel")
-        self.hf_msg.pack(side="left", padx=6)
-        self.after(200, self._hf_poll)
-        self.bind("<Destroy>", lambda e: self._hf.close() if e.widget is self else None)
-
-    def _hf_open(self):
-        self.hf_msg.config(text="Opening the browser...")
+    def _connect_hf(self):
+        """Open a real browser, let the user pass the bot check, then take over its cookies + User-Agent."""
+        import threading
+        from core import browser_session
+        self.hf_btn.state(["disabled"])
+        self.status_var.set("Opening browser...")
+        box = {}
+        install = self.hf_btn.cget("text") == "Install browser component"
 
         def work():
             try:
-                self._hf.open("https://www.hentai-foundry.com/")
-                self._hf_q.put(("opened", "Pass the check in the browser window, then press Save session."))
-            except Exception as ex:
-                self._hf_q.put(("error", str(ex)))
-        threading.Thread(target=work, daemon=True).start()
-
-    def _hf_save(self):
-        self.hf_msg.config(text="Reading the session...")
-
-        def work():
-            try:
-                cookie, ua = self._hf.grab("hentai-foundry.com")
-                self._hf_q.put(("grabbed", (cookie, ua)))
-            except Exception as ex:
-                self._hf_q.put(("error", str(ex)))
-        threading.Thread(target=work, daemon=True).start()
-
-    def _hf_poll(self):
-        try:
-            while True:
-                kind, val = self._hf_q.get_nowait()
-                if kind == "opened":
-                    self.hf_save.config(state="normal")
-                    self.hf_msg.config(text=val)
-                elif kind == "grabbed":
-                    cookie, ua = val
-                    if not cookie:
-                        self.hf_msg.config(text="No cookies yet: finish the check in the browser, then try again.")
-                        continue
-                    self.vars[("hentaifoundry", "cookie")].set(cookie)
-                    self.vars[("hentaifoundry", "user_agent")].set(ua)
-                    self._hf.close()
-                    self.hf_save.config(state="disabled")
-                    self.hf_msg.config(text=f"Session captured ({cookie.count('=')} cookie(s)). Press Save to keep it.")
+                if install:
+                    box["msg"] = "Installing (a minute or two)..."
+                    browser_session.install_fallback()
+                    box["done"] = "Installed. Click Connect browser."
                 else:
-                    self.hf_msg.config(text=val)
-        except queue.Empty:
-            pass
-        if self.winfo_exists():
-            self.after(200, self._hf_poll)
+                    box["res"] = browser_session.capture_hentai_foundry(
+                        status=lambda m: box.__setitem__("msg", m), cancelled=lambda: box.get("stop", False))
+            except Exception as ex:
+                box["err"] = str(ex)
+        threading.Thread(target=work, daemon=True).start()
+        self.bind("<Destroy>", lambda e: box.__setitem__("stop", True) if e.widget is self else None)
+
+        def poll():
+            if not self.winfo_exists():
+                return
+            if "res" in box:
+                self.vars[("hentaifoundry", "cookie")].set(box["res"]["cookie"])
+                self.vars[("hentaifoundry", "user_agent")].set(box["res"]["user_agent"])
+                self.status_var.set("Connected. Click Save to keep it.")
+                self.hf_btn.state(["!disabled"])
+            elif "done" in box:
+                self.status_var.set(box["done"])
+                self.hf_btn.config(text="Connect browser")
+                self.hf_btn.state(["!disabled"])
+            elif "err" in box:
+                if box["err"] == "NEED_FALLBACK":
+                    self.status_var.set("No Chrome or Edge found. Click Install browser component.")
+                    self.hf_btn.config(text="Install browser component")
+                else:
+                    self.status_var.set(box["err"])
+                self.hf_btn.state(["!disabled"])
+            else:
+                if box.get("msg"):
+                    self.status_var.set(box["msg"])
+                self.after(500, poll)
+        poll()
+
+    def _connect_rule34(self):
+        """Open a real browser, let the user pass Rule34's CAPTCHA if shown,
+        then save the resulting cookies + User-Agent for the site's web fallback."""
+        import threading
+        from core import browser_session
+        self.r34_btn.state(["disabled"])
+        self.status_var.set("Opening Rule34 browser...")
+        box = {}
+
+        def work():
+            try:
+                box["res"] = browser_session.capture_rule34(
+                    status=lambda m: box.__setitem__("msg", m),
+                    cancelled=lambda: box.get("stop", False))
+            except Exception as ex:
+                box["err"] = str(ex)
+
+        threading.Thread(target=work, daemon=True).start()
+        self.bind("<Destroy>", lambda e: box.__setitem__("stop", True) if e.widget is self else None)
+
+        def poll():
+            if not self.winfo_exists():
+                return
+            if "res" in box:
+                self.vars[("rule34", "cookie")].set(box["res"]["cookie"])
+                self.vars[("rule34", "user_agent")].set(box["res"]["user_agent"])
+                self.status_var.set("Rule34 connected. Click Save to keep it.")
+                self.r34_btn.state(["!disabled"])
+            elif "err" in box:
+                if box["err"] == "NEED_FALLBACK":
+                    self.status_var.set("No Chrome or Edge found. Install the browser component first.")
+                else:
+                    self.status_var.set(box["err"])
+                self.r34_btn.state(["!disabled"])
+            else:
+                if box.get("msg"):
+                    self.status_var.set(box["msg"])
+                self.after(500, poll)
+        poll()
 
     def _browse(self):
         d = filedialog.askdirectory(parent=self, initialdir=self.out_var.get())

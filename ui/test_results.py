@@ -26,7 +26,7 @@ class TestResultsWindow(tk.Toplevel):
         summary = "   ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "no results"
         tk.Label(self, text=f"Site check finished - {summary}", bg=theme.BG, fg=theme.CRIMSON,
                  font=theme.FONT_LABELFRAME).pack(anchor="w", padx=14, pady=(12, 2))
-        tk.Label(self, text="One tiny search per site. \"ok\" = live and returning files; \"empty\" = the site answered but "
+        tk.Label(self, text="One tiny search per site. \"ok\" = live and returning a usable media result; \"empty\" = the site answered but "
                             "nothing matched; \"fail\" = a real error (down, blocked, or needs a key in Settings).",
                  bg=theme.BG, fg=theme.MUTED, font=theme.FONT_SMALL, wraplength=720,
                  justify="left").pack(anchor="w", padx=14, pady=(0, 6))

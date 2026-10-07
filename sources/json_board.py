@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from core import netlog
 from sources.base import Source
 from core.media_item import MediaItem
 from core.safety import is_blocked, query_blocked
@@ -159,6 +160,18 @@ class JsonBoardSource(Source):
                 mtype = "video" if ext in VIDEO_EXTS else "audio" if ext in AUDIO_EXTS else "image"
                 if prioritize_images and mtype == "video" and videos_kept * 4 >= images_kept:
                     continue
+                wanted = getattr(self, "wanted_types", None)
+                if wanted and mtype not in wanted:          # e.g. only Image ticked: don't download videos
+                    continue
+                if getattr(self, "_site_check", False):
+                    if self._site_check_probe(url):
+                        results.append(MediaItem(file_path="", caption=post.get("title") or f"{query} result",
+                                                 media_type=mtype, source_label=f"{self.label}: {query}",
+                                                 post_id=f"{self.prefix}{pid}", source_type=self.id,
+                                                 extra={"site_check": True, "probe_url": url}))
+                        break
+                    log(f"   -> media probe failed for {pid}", "warning")
+                    continue
                 try:
                     content = self._open(url, headers=self._download_headers(), timeout=40)
                 except Exception as ex:
@@ -209,3 +222,18 @@ class JsonBoardSource(Source):
 
     def _download_headers(self):
         return {"User-Agent": self.user_agent, "Referer": (self.base_url or "") + "/"}
+
+    def _site_check_probe(self, url):
+        """Probe a media URL without downloading the file. A site check only
+        needs to know that the returned media endpoint answers; it must not
+        pull a 500 MB video just to display a green check mark."""
+        headers = dict(self._download_headers())
+        headers["Range"] = "bytes=0-65535"
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+                resp.read(65536)
+                return status in (200, 206)
+        except Exception:
+            return False

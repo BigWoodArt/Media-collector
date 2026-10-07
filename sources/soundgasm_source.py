@@ -82,6 +82,10 @@ class SoundgasmSource(Source):
               early_preview_cb=None, randomize=False, prioritize_images=False,
               item_cb=None, skip_ids=None):
         username = query.strip().lstrip("@")
+        wanted = getattr(self, "wanted_types", None)
+        if wanted and "audio" not in wanted and not getattr(self, "_site_check", False):
+            log("[Soundgasm] audio isn't one of the selected types - nothing to download.", "warning")
+            return []
         os.makedirs(dest_dir, exist_ok=True)
         profile_url = f"https://soundgasm.net/u/{username}"
         log(f"Fetching Soundgasm profile for {username}...")

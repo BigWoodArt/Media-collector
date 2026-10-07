@@ -1,6 +1,3 @@
-## v0.1.8
-- Site-check probes now read up to 10 MiB.
-
 """Kemono / Coomer creator scraper for MediaCollector.
 
 The two sites expose the same API family.  This module intentionally uses the
@@ -13,6 +10,7 @@ import html
 import json
 import os
 import random
+import threading
 import re
 import time
 import urllib.error
@@ -71,15 +69,20 @@ class _KemonoFamily(Source):
     default_order = ""
     check_query = "test"
 
+    img_root = ""               # preview host: <img_root>/thumbnail/data/... still works where the full-size file servers are blocked
+    check_timeout = 45.0        # big creator pages are slow; the site check waits longer for these
     root = ""
     site_name = ""
     id = ""
     label = ""
     query_hint = "SERVICE/user/CREATOR or creator URL"
 
-    def __init__(self):
+    def __init__(self, base_url=""):
         self._last_request = 0.0
         self.seen_hashes = set()
+        base = (base_url or "").strip().rstrip("/")
+        if base:                    # the sites rotate domains (.cr/.su/.pro, .st/.su/...): let the user pick a live one
+            self.root = base if "://" in base else "https://" + base
 
     def _wait(self):
         delay = MIN_INTERVAL - (time.time() - self._last_request)
@@ -103,6 +106,30 @@ class _KemonoFamily(Source):
                 raw = zlib.decompress(raw)
             return raw
 
+    API_TIMEOUT = 40.0
+
+    def _json_stoppable(self, url, stop_event):
+        """_json() in a helper thread so Stop works and a stuck server can't hang the run forever."""
+        box = {}
+
+        def work():
+            try:
+                box["v"] = self._json(url)
+            except BaseException as ex:         # noqa: BLE001 - re-raised below
+                box["e"] = ex
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        end = time.time() + self.API_TIMEOUT
+        while t.is_alive():
+            if stop_event.is_set():
+                raise InterruptedError("stopped")
+            if time.time() > end:
+                raise TimeoutError(f"no answer from the API after {self.API_TIMEOUT:.0f}s")
+            t.join(0.25)
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
+
     def _json(self, url):
         raw = self._request(url)
         try:
@@ -116,6 +143,7 @@ class _KemonoFamily(Source):
         q = query.strip().lower()
         if not q:
             return []
+        qn = re.sub(r"[^a-z0-9]", "", q)       # "Queen of Milk", "queen_of_milk" and "queenofmilk" all match
         now = time.time()
         cached = CREATOR_CACHE.get(cls.id)
         if cached and now - cached[0] < CREATOR_CACHE_TTL:
@@ -123,7 +151,7 @@ class _KemonoFamily(Source):
         else:
             try:
                 req = urllib.request.Request(cls.root + "/api/v1/creators", headers=HEADERS)
-                with urllib.request.urlopen(req, timeout=12) as r:
+                with urllib.request.urlopen(req, timeout=40) as r:
                     creators = json.loads(r.read().decode("utf-8", "replace"))
                 if not isinstance(creators, list):
                     creators = []
@@ -138,7 +166,9 @@ class _KemonoFamily(Source):
             service = str(c.get("service") or "")
             cid = str(c.get("id") or "")
             hay = f"{name} {service} {cid}".lower()
-            if q not in hay or not service or not cid:
+            if not service or not cid:
+                continue
+            if q not in hay and qn not in re.sub(r"[^a-z0-9]", "", f"{name} {cid}".lower()):
                 continue
             fav = c.get("favorited")
             try:
@@ -154,6 +184,40 @@ class _KemonoFamily(Source):
         out.sort(key=lambda x: -(x["count"] or 0))
         return out[:12]
 
+    BARE_SERVICES = ("onlyfans", "fansly", "candfans")      # Coomer services a bare username may live on
+
+    @classmethod
+    def _profile_state(cls, root, service, creator):
+        """-> ("yes", name) | ("no", "") | ("unknown", "").  404 = definitely no such creator on that service."""
+        url = f"{root}/api/v1/{service}/user/{urllib.parse.quote(creator, safe='')}/profile"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            if isinstance(data, dict) and (data.get("id") or data.get("name")):
+                return "yes", str(data.get("name") or creator)
+            return "no", ""
+        except urllib.error.HTTPError as ex:
+            return ("no", "") if ex.code == 404 else ("unknown", "")
+        except Exception:
+            return "unknown", ""
+
+    @classmethod
+    def _find_bare(cls, root, name):
+        """Look a bare Coomer username up on each service (in parallel). -> (hits [(service, id, display)], any_unknown)."""
+        creator = name.strip().lower()
+        out = {}
+
+        def one(svc):
+            out[svc] = cls._profile_state(root, svc, creator)
+        threads = [threading.Thread(target=one, args=(sv,), daemon=True) for sv in cls.BARE_SERVICES]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(12)
+        hits = [(sv, creator, out[sv][1]) for sv in cls.BARE_SERVICES if out.get(sv, ("unknown",))[0] == "yes"]
+        unknown = any(out.get(sv, ("unknown",))[0] == "unknown" for sv in cls.BARE_SERVICES)
+        return hits, unknown
+
     @classmethod
     def suggest(cls, query):
         q = query.strip().strip("/")
@@ -164,9 +228,15 @@ class _KemonoFamily(Source):
         # username, we can still offer an exact Find -> Match result without
         # pretending to know its follower count.
         if cls.id == "coomer" and len([p for p in q.split("/") if p]) == 1 and " " not in q:
-            service, creator = cls._parse_query(q)
-            return [{"value": f"{service}/user/{creator}",
-                     "label": f"{cls.label} {service}: {creator}", "count": None, "nofilter": True}]
+            hits, unknown = cls._find_bare(cls.root, q)
+            if hits:
+                return [{"value": f"{sv}/user/{cid}", "label": f"{cls.label} {sv}: {disp}",
+                         "count": None, "nofilter": True} for sv, cid, disp in hits]
+            if unknown:         # couldn't check (offline/blocked): offer the usual guess rather than nothing
+                service, creator = cls._parse_query(q)
+                return [{"value": f"{service}/user/{creator}",
+                         "label": f"{cls.label} {service}: {creator}", "count": None, "nofilter": True}]
+            return cls._creator_matches(q)          # no exact account: partial matches from the creator list
         if ("/user/" in q.lower()) and len([p for p in q.split("/") if p]) >= 3:
             service, creator = cls._parse_query(q)
             return [{"value": f"{service}/user/{creator}",
@@ -208,6 +278,103 @@ class _KemonoFamily(Source):
             return self.root + "/data" + path
         return self.root + "/data/" + path
 
+    _full_blocked = False
+    last_was_preview = False
+    _node = ""      # media host prefix that last worked ("n4"), tried first next time
+
+    def _candidates(self, url):
+        """Media files are served from numbered nodes (n1..n4.<domain>); the main domain's /data/ path may not be
+        reachable. Try the URL as given plus each node, the last working one first."""
+        if not url.startswith(self.root + "/"):
+            return [url]
+        host, tail = urllib.parse.urlparse(self.root).netloc, url[len(self.root):]
+        nodes = [f"https://n{i}.{host}{tail}" for i in (1, 2, 3, 4)]
+        out = [url] + nodes
+        if self._node:
+            first = f"https://{self._node}.{host}{tail}"
+            out = [first] + [u for u in out if u != first]
+        return out
+
+    def _thumb_url(self, media_url):
+        path = urllib.parse.urlparse(media_url).path
+        if not self.img_root or not path.startswith("/data/") or _type(_ext(media_url)) != "image":
+            return ""
+        return self.img_root + "/thumbnail" + path
+
+    def _get_media(self, url, referer, probe=False, log=None):
+        """-> (bytes, working_url). probe=True only checks that the file starts downloading.
+        If no full-size host answers but the preview host does, returns the preview and sets self.last_was_preview."""
+        self.last_was_preview = False
+        last = OSError("no media host answered")
+        thumb = self._thumb_url(url)
+        if self._full_blocked and not thumb:
+            if log and not getattr(self, "_skip_noted", False):
+                self._skip_noted = True
+                log(f"[{self.label}] full-size file servers are unreachable from this network: videos can't be "
+                    f"downloaded (only the preview of images can)", "warning")
+            raise OSError("full-size file servers are unreachable from this network (no preview exists for this file type)")
+        if thumb:
+            # One quick try at the full-size file (the site redirects to a file server anyway); then the preview.
+            cands = ([] if self._full_blocked else [url]) + [thumb]
+        else:
+            cands = self._candidates(url)
+        for cand in cands:
+            if self._full_blocked and cand not in (url, thumb):
+                continue                    # the main file server is unreachable: n1..n4 are the same story
+            try:
+                ref = self.root + "/" if cand == thumb else referer
+                if probe:
+                    req = urllib.request.Request(cand, headers={**HEADERS, "Referer": ref, "Range": "bytes=0-65535"})
+                    with urllib.request.urlopen(req, timeout=8) as r:
+                        status = getattr(r, "status", None) or r.getcode()
+                        r.read(65536)
+                    if status not in (200, 206):
+                        raise OSError(f"HTTP {status}")
+                    data = b""
+                else:
+                    data = self._request(cand, timeout=15, referer=ref)
+            except Exception as ex:
+                last = ex
+                if cand == url and not isinstance(ex, urllib.error.HTTPError):
+                    self._full_blocked = True           # can't connect at all: don't wait on it again this run
+                continue
+            if cand == thumb:
+                self.last_was_preview = True
+                self._full_blocked = True           # full-size servers unreachable: go straight to previews from now on
+                if not getattr(self, "_preview_noted", False):
+                    self._preview_noted = True
+                    if log:
+                        log(f"[{self.label}] full-size file servers aren't reachable from this network - "
+                            f"using the site's (smaller) preview images instead", "warning")
+                return data, cand
+            host = urllib.parse.urlparse(cand).netloc
+            if host.startswith("n") and "." in host and host.split(".", 1)[0][1:].isdigit():
+                self._node = host.split(".", 1)[0]
+            return data, cand
+        raise last
+
+    def _get_media_stoppable(self, url, referer, stop_event, probe=False, log=None, limit=90.0):
+        """_get_media() in a helper thread: Stop acts within a second and one file can't hang the run."""
+        box = {}
+
+        def work():
+            try:
+                box["v"] = self._get_media(url, referer, probe=probe, log=log)
+            except BaseException as ex:         # noqa: BLE001 - re-raised below
+                box["e"] = ex
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        end = time.time() + limit
+        while t.is_alive():
+            if stop_event.is_set():
+                raise InterruptedError("stopped")
+            if time.time() > end:
+                raise TimeoutError(f"file download took longer than {limit:.0f}s")
+            t.join(0.25)
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
+
     @staticmethod
     def _post_data(raw):
         if isinstance(raw, dict) and isinstance(raw.get("post"), dict):
@@ -237,17 +404,41 @@ class _KemonoFamily(Source):
         except ValueError as ex:
             log(f"[{self.label}] {ex}", "error")
             return []
+        bare = [x for x in re.split(r"[/]+", re.sub(r"^https?://[^/]+/", "", query.strip())) if x]
+        if self.id == "coomer" and len(bare) == 1:
+            # A bare name is not necessarily an OnlyFans account: find which service actually has it.
+            hits, unknown = self._find_bare(self.root, bare[0])
+            if hits:
+                service, creator = hits[0][0], hits[0][1]
+                log(f"[{self.label}] '{bare[0]}' found on {service}" +
+                    (f" (also on {', '.join(h[0] for h in hits[1:])} - use SERVICE/user/NAME for those)" if len(hits) > 1 else ""))
+            elif not unknown:
+                matches = self._creator_matches(bare[0])        # Fansly etc. use numeric IDs: match by display name
+                if matches:
+                    service, _, creator = matches[0]["value"].split("/", 2)
+                    log(f"[{self.label}] '{bare[0]}' matched {matches[0]['label']}" +
+                        (f" (other matches: {', '.join(m['value'] for m in matches[1:4])})" if len(matches) > 1 else ""))
+                else:
+                    log(f"[{self.label}] no creator named '{bare[0]}'. Use the creator's page address instead "
+                        f"(SERVICE/user/ID, e.g. fansly/user/549327668156313600).", "error")
+                    return []
 
         endpoint = f"{self.root}/api/v1/{urllib.parse.quote(service, safe='')}/user/{urllib.parse.quote(creator, safe='')}/posts"
         log(f"[{self.label}] endpoint: {endpoint}?o=0", "debug")
         log(f"Fetching {self.label} {service}/user/{creator}...")
         results = []
+        self._full_blocked = False
         offset = 0
         post_count = 0
         while len(results) < limit and not stop_event.is_set():
             url = endpoint + "?" + urllib.parse.urlencode({"o": offset})
             try:
-                data = self._json(url)
+                t_api = time.time()
+                log(f"[{self.label}] asking the API for posts (offset {offset})...", "debug")
+                data = self._json_stoppable(url, stop_event)
+                log(f"[{self.label}] API answered in {time.time() - t_api:.1f}s", "debug")
+            except InterruptedError:
+                break
             except urllib.error.HTTPError as ex:
                 try:
                     body = ex.read(220).decode("utf-8", "replace").replace("\\n", " ")
@@ -290,34 +481,35 @@ class _KemonoFamily(Source):
                         continue
                     ext = _ext(media_url, info.get("name", ""))
                     media_type = _type(ext)
+                    wanted = getattr(self, "wanted_types", None)
+                    if wanted and media_type not in wanted and not getattr(self, "_site_check", False):
+                        continue                # e.g. only Image ticked: don't even start downloading videos
                     if prioritize_images and media_type != "image":
                         # Keep a soft preference; don't throw away non-images if no images arrive.
                         if len(results) and sum(1 for x in results if x.media_type == "image") * 4 >= len(results):
                             continue
                     if getattr(self, "_site_check", False):
-                        req = urllib.request.Request(media_url, headers={**HEADERS, "Referer": post_url, "Range": "bytes=0-10485759"})
                         try:
-                            with urllib.request.urlopen(req, timeout=8) as probe:
-                                status = getattr(probe, "status", None) or probe.getcode()
-                                probe.read(10 * 1024 * 1024)
-                            if status not in (200, 206):
-                                raise OSError(f"HTTP {status}")
+                            _, media_url = self._get_media_stoppable(media_url, post_url, stop_event, probe=True, log=log)
+                        except InterruptedError:
+                            return results
                         except Exception as ex:
-                            log(f"   -> media probe failed {post_id}/{n}: {ex}", "warning")
-                            # A site check only needs one working media URL. Do
-                            # not walk every attachment when the first one is
-                            # unreachable.
-                            break
+                            log(f"[{self.label}] API answers but no media host does ({ex})", "error")
+                            return results
                         results.append(MediaItem(
                             file_path="", caption=title, media_type=media_type,
                             source_label=f"{self.label}: {service}/{creator}",
                             post_id=item_id, source_type=self.id, attribution=post_url,
                             extra={"service": service, "creator": creator, "post_id": post_id,
-                                   "file_kind": kind, "original_url": media_url, "site_check": True},
+                                   "file_kind": kind, "original_url": media_url, "site_check": True,
+                                   "preview": self.last_was_preview},
                         ))
                         break
+                    log(f"[{self.label}] downloading file {len(results) + 1}: post {post_id}/{n} ({media_type})", "debug")
                     try:
-                        content = self._request(media_url, timeout=45, referer=post_url)
+                        content, media_url = self._get_media_stoppable(media_url, post_url, stop_event, log=log)
+                    except InterruptedError:
+                        break
                     except Exception as ex:
                         log(f"   -> failed {post_id}/{n}: {ex}", "warning")
                         continue
@@ -327,7 +519,8 @@ class _KemonoFamily(Source):
                     if digest in self.seen_hashes:
                         continue
                     self.seen_hashes.add(digest)
-                    filename = f"{title}_{post_id}_{digest[:8]}{ext}"
+                    preview = self.last_was_preview
+                    filename = f"{title}_{post_id}_{digest[:8]}{'_preview' if preview else ''}{ext}"
                     path = os.path.join(dest_dir, filename)
                     try:
                         with open(path, "wb") as fh:
@@ -340,7 +533,7 @@ class _KemonoFamily(Source):
                         source_label=f"{self.label}: {service}/{creator}",
                         post_id=item_id, source_type=self.id, attribution=post_url,
                         extra={"service": service, "creator": creator, "post_id": post_id,
-                               "file_kind": kind, "original_url": media_url},
+                               "file_kind": kind, "original_url": media_url, "preview": preview},
                     )
                     results.append(item)
                     if item_cb:
@@ -362,6 +555,7 @@ class KemonoSource(_KemonoFamily):
     label = "Kemono"
     site_name = "kemono"
     root = "https://kemono.cr"
+    img_root = "https://img.kemono.cr"
     check_query = "patreon/user/5163822"
     query_hint = "SERVICE/user/CREATOR or Kemono creator URL"
 
@@ -371,5 +565,6 @@ class CoomerSource(_KemonoFamily):
     label = "Coomer"
     site_name = "coomer"
     root = "https://coomer.st"
+    img_root = "https://img.coomer.st"
     check_query = "onlyfans/user/alinity"
     query_hint = "SERVICE/user/CREATOR or Coomer creator URL"

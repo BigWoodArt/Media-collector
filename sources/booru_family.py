@@ -237,7 +237,7 @@ class BooruFamilySource(Source):
 
     def _explain(self, ex, hint=True):
         if hint and self.api_key_helps and not self.api_key:
-            hint = "; if this keeps failing, an API key + user ID in the Options tab may help"
+            hint = "; Rule34 now requires an API key + user ID for its API; if the website fallback shows a CAPTCHA, pass it in a browser or add those credentials in Options"
         else:
             hint = ""
         if isinstance(ex, urllib.error.HTTPError):

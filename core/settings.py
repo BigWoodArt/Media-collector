@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.9"
 APP_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = APP_DIR / "collector_settings.json"
 
@@ -17,12 +17,16 @@ CRED_FIELDS = [
     ("gelbooru", "user_id", "Gelbooru user ID", "Optional. Both ID and key together enable the faster API."),
     ("gelbooru", "api_key", "Gelbooru API key", "Optional."),
     ("rule34", "user_id", "Rule34 user ID", "Optional. Both ID and key together enable the faster API."),
-    ("rule34", "api_key", "Rule34 API key", "Optional."),
+    ("rule34", "api_key", "Rule34 API key", "Optional. Rule34 now requires API credentials for its API."),
+    ("rule34", "cookie", "Rule34 browser cookie", "Optional. If the website shows a CAPTCHA, click Connect browser and pass it normally."),
+    ("rule34", "user_agent", "Rule34 browser ID", "Filled by Connect browser. Must match the browser session that passed the CAPTCHA."),
     ("wallhaven", "api_key", "Wallhaven API key", "Free, from account settings. Needed for NSFW results."),
     ("lemmy", "api_key", "Lemmy login token", "Your account's JWT. Needed to see NSFW posts."),
     ("lemmy", "instance", "Lemmy home instance", "e.g. lemmy.world - where your account lives."),
-    ("hentaifoundry", "cookie", "Hentai Foundry cookie", "Filled in by 'Save session' below, or paste the Cookie header from your browser by hand (F12 > Network). It expires."),
-    ("hentaifoundry", "user_agent", "Hentai Foundry browser ID", "Filled in by 'Save session' (the browser's user-agent text). Leave blank if you paste a cookie by hand."),
+    ("hentaifoundry", "cookie", "Hentai Foundry cookie", "Needed: the site blocks scripts. Click Connect browser, pass the check in the window that opens. Or paste your browser's Cookie header by hand. It expires."),
+    ("hentaifoundry", "user_agent", "Hentai Foundry browser ID", "Filled by Connect browser. Must match the browser that passed the check; leave blank for a pasted cookie."),
+    ("kemono", "base_url", "Kemono address", "Optional. Only if the site moved: its current web address, e.g. https://kemono.su"),
+    ("coomer", "base_url", "Coomer address", "Optional. Only if the site moved: its current web address, e.g. https://coomer.su"),
     ("freesound", "api_key", "Freesound API key", "Free, from freesound.org/apiv2/apply."),
 ]
 CRED_FIELDS = [f for f in CRED_FIELDS if f[1]]

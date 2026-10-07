@@ -77,7 +77,7 @@ class HentaiFoundry(unittest.TestCase):
         s._open = op
         with self.assertRaises(ApiError) as cm:
             s._page("cat", None)
-        self.assertIn("Cookie", str(cm.exception))
+        self.assertIn("Connect browser", str(cm.exception))
         self.assertEqual(str(cm.exception).split(" (HTTP")[0], BLOCK_HELP)
 
     def test_cookie_is_sent_and_picture_page_resolved(self):
@@ -87,11 +87,6 @@ class HentaiFoundry(unittest.TestCase):
             b'<meta property="og:image" content="//pictures.hentai-foundry.com/b/bob/101/x.jpg">')
         url = s._resolve_url({"id": "101", "path": "/pictures/user/bob/101/First"}, lambda *a: None)
         self.assertEqual(url, "https://pictures.hentai-foundry.com/b/bob/101/x.jpg")
-
-    def test_browser_identity_is_sent_with_the_cookie(self):
-        s = HentaiFoundrySource(cookie="a=b", user_agent="MyBrowser/1.0")
-        for h in (s._headers(), s._download_headers()):
-            self.assertEqual((h["User-Agent"], h["Cookie"]), ("MyBrowser/1.0", "a=b"))
 
     def test_registered_and_cleaned(self):
         from sources import SOURCE_BY_ID
@@ -175,3 +170,22 @@ class FindLookups(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowserSession(unittest.TestCase):
+    def test_cookie_header_filters_by_host(self):
+        from core.browser_session import cookie_header
+        cs = [{"name": "cf_clearance", "value": "x", "domain": ".hentai-foundry.com"},
+              {"name": "PHPSESSID", "value": "y", "domain": "www.hentai-foundry.com"},
+              {"name": "other", "value": "z", "domain": ".example.com"}]
+        self.assertEqual(cookie_header(cs, "www.hentai-foundry.com"), "cf_clearance=x; PHPSESSID=y")
+
+    def test_looks_passed(self):
+        from core.browser_session import looks_passed
+        self.assertTrue(looks_passed("<title>Hentai Foundry</title>", "hentai foundry"))
+        self.assertFalse(looks_passed("Making sure you're not a bot - Hentai Foundry", "hentai foundry"))
+
+    def test_user_agent_override(self):
+        s = HentaiFoundrySource(cookie="a=b", user_agent="UA/1")
+        self.assertEqual(s._headers()["User-Agent"], "UA/1")
+        self.assertEqual(s._download_headers()["User-Agent"], "UA/1")

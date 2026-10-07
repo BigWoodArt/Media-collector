@@ -75,6 +75,10 @@ class FreesoundSource(Source):
             log("No Freesound API key set (Options tab) — get a free one at "
                 "freesound.org/apiv2/apply/. Aborting.", "error")
             return []
+        wanted = getattr(self, "wanted_types", None)
+        if wanted and "audio" not in wanted and not getattr(self, "_site_check", False):
+            log("[Freesound] audio isn't one of the selected types - nothing to download.", "warning")
+            return []
 
         os.makedirs(dest_dir, exist_ok=True)
         sort_param = SORT_MAP.get(sort or "Relevance", "score")

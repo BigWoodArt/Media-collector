@@ -438,6 +438,10 @@ class RedditSource(Source):
             # A gifv/redgifs/v.redd.it post's later candidates are often
             # Skip the whole post, not just the video: its thumbnail fallback gave blurry "images".
             is_video_post = bool(candidates) and candidates[0][3] == "video"
+            wanted = getattr(self, "wanted_types", None)
+            if wanted and candidates and (("video" if is_video_post else "image") not in wanted):
+                log(f"[{idx}/{total}] skipped ({'video' if is_video_post else 'image'} not selected): {clean_title}")
+                continue
             if prioritize_images and is_video_post and videos_kept * 4 >= images_kept:
                 log(f"[{idx}/{total}] skipped (prioritizing images): {clean_title}")
                 continue

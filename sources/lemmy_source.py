@@ -57,10 +57,16 @@ class LemmySource(JsonBoardSource):
         posts = []
         for r in rows:
             p = r.get("post") or {}
-            url = p.get("url") or ""
+            url = p.get("url") or p.get("thumbnail_url") or ""
             ctype = p.get("url_content_type") or ""
             ext = os.path.splitext(url.split("?")[0])[1].lower()
-            if url and (ext in IMG_EXTS or ctype.startswith(("image/", "video/"))):
+            # Lemmy sometimes omits url_content_type and uses a CDN URL with
+            # no useful extension. If it supplied a thumbnail, that is still
+            # a concrete media result and is preferable to declaring the
+            # community empty.
+            is_media = bool(url and (ext in IMG_EXTS or ctype.startswith(("image/", "video/"))
+                                     or p.get("thumbnail_url")))
+            if is_media:
                 posts.append({"id": p["id"], "url": url, "tags": [], "title": p.get("name") or "",
                               "text": p.get("name") or ""})
         return posts, (page + 1 if len(rows) >= self.page_size else None)

@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
+from core import netlog
 from sources.base import Source
 from core.media_item import MediaItem
 
@@ -158,6 +159,26 @@ class EromeSource(Source):
                     continue  # soft cap: skip this video, try the next media item
                 if skip_ids and f"erome_{album_id}_{i}" in skip_ids:
                     continue
+                wanted = getattr(self, "wanted_types", None)
+                if wanted and media_type not in wanted and not getattr(self, "_site_check", False):
+                    continue                    # not a type you ticked: don't download it
+
+                if getattr(self, "_site_check", False):
+                    headers = dict(BROWSER_HEADERS, Referer="https://www.erome.com/", Range="bytes=0-10485759")
+                    req = urllib.request.Request(media_url, headers=headers)
+                    try:
+                        with urllib.request.urlopen(req, timeout=8) as resp:
+                            status = getattr(resp, "status", None) or resp.getcode()
+                            resp.read(10 * 1024 * 1024)
+                        if status not in (200, 206):
+                            raise OSError(f"HTTP {status}")
+                    except Exception as ex:
+                        log(f"   -> media probe failed in {album_id}: {ex}", "warning")
+                        continue
+                    results.append(MediaItem(file_path="", caption=title, media_type=media_type,
+                                            source_label=f"Erome: {tag}", post_id=f"erome_{album_id}_{i}",
+                                            source_type="erome", extra={"site_check": True, "probe_url": media_url}))
+                    break
 
                 try:
                     content = self._get_bytes(media_url)

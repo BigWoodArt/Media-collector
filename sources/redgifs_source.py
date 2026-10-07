@@ -254,6 +254,9 @@ class RedgifsSource(Source):
                     sampled = True
                     log(f"API sample: type={meta['api_type']} duration={meta['duration']} "
                         f"hasAudio={meta['has_audio']} url keys={meta['url_keys']}")
+                wanted = getattr(self, "wanted_types", None)
+                if wanted and media_type not in wanted:
+                    continue                             # not a type you ticked: don't download it
                 if prioritize_images and media_type == "image" and images_kept * 4 >= videos_kept:
                     continue                             # favouring videos: skip labelled stills up front
 

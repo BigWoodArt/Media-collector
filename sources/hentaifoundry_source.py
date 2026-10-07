@@ -1,7 +1,8 @@
 """Hentai Foundry search.
 The site shows a "making sure you're not a bot" page to scripts. This source does NOT try to get around it: in
-Settings you open the site in a real browser window, pass the check yourself, and the program reuses that session's
-cookies (see core/browser_session.py). It expires, so repeat when searches stop working. Requests are slow (about 2.5 s apart)."""
+Settings, "Connect browser" opens a real browser window, you pass the check yourself, and the session's cookies and
+User-Agent are reused here (core/browser_session.py). Pasting a Cookie header by hand still works. The cookie expires;
+connect again when searches stop working. Requests are slow (about 2.5 s apart)."""
 import html
 import re
 import urllib.error
@@ -15,29 +16,62 @@ BROWSER_HEADERS = {
                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
     "Accept-Language": "en-US,en;q=0.9",
 }
-BLOCK_HELP = ("Hentai Foundry's bot check stopped this request. In Settings, use 'Open browser to sign in', pass the "
-              "check in that window, then 'Save session' (it expires, so repeat when it stops working). "
-              "Or paste your browser's Cookie header there by hand.")
-BLOCK_RE = re.compile(r"<div class=['\"]thumb_square['\"]>(.*?)(?=<div class=['\"]thumb_square['\"]>|<div class=['\"]pagebar|$)", re.S)
-LINK_RE = re.compile(r'class="thumbLink" href="(/pictures/user/([^/"]+)/(\d+)[^"]*)"')
-TITLE_RE = re.compile(r'<span title="([^"]*)" class="thumb"')
-RATING_RE = re.compile(r"class='rating[^']*' title='([^']*)'")
+BLOCK_HELP = ("Hentai Foundry's bot check stopped this request. In Settings, click Connect browser next to the "
+              "Hentai Foundry cookie, pass the check in the window that opens, then Save (it expires, so redo this when needed).")
+BLOCK_RE = re.compile(r'<div\b[^>]*class\s*=\s*["\'][^"\']*\bthumb_square\b[^"\']*["\'][^>]*>(.*?)(?=<div\b[^>]*class\s*=\s*["\'][^"\']*\bthumb_square\b|<div\b[^>]*class\s*=\s*["\'][^"\']*\bpagebar\b|$)', re.S | re.I)
+LINK_RE = re.compile(r'<a\b(?=[^>]*\bclass\s*=\s*["\'][^"\']*\bthumbLink\b[^"\']*["\'])(?=[^>]*\bhref\s*=\s*["\'](/pictures/user/([^/"\']+)/(\d+)[^"\']*)["\'])[^>]*>', re.I)
+TITLE_RE = re.compile(r'<span\b(?=[^>]*\bclass\s*=\s*["\'][^"\']*\bthumb\b[^"\']*["\'])(?=[^>]*\btitle\s*=\s*["\']([^"\']*)["\'])[^>]*>', re.I)
+RATING_RE = re.compile(r'<[^>]*\bclass\s*=\s*["\'][^"\']*\brating\b[^"\']*["\'][^>]*\btitle\s*=\s*["\']([^"\']*)["\'][^>]*>', re.I)
 
 
 def parse_results(page):
-    """-> (posts, has_next)."""
+    """-> (posts, has_next).
+
+    The site has changed its thumbnail wrappers over time. The stable part is
+    the /pictures/user/<name>/<id>/ link, so use that as the fallback.
+    """
     posts = []
-    for block in BLOCK_RE.findall(page):
+    seen = set()
+    blocks = BLOCK_RE.findall(page)
+    if not blocks:
+        blocks = re.split(r'(?=<a\b[^>]*href\s*=)', page, flags=re.I)
+
+    for block in blocks:
         m = LINK_RE.search(block)
         if not m:
+            m = re.search(
+                r'<a\b[^>]*href\s*=\s*["\']'
+                r'(/pictures/user/([^/"\']+)/(\d+)(?:/[^"\']*)?)'
+                r'["\'][^>]*>', block, re.I)
+        if not m:
             continue
+        path, user, pid = m.group(1), m.group(2), m.group(3)
+        if pid in seen:
+            continue
+        seen.add(pid)
+
         t = TITLE_RE.search(block)
+        if not t:
+            t = re.search(
+                r'<(?:span|img)\b[^>]*\btitle\s*=\s*["\']([^"\']*)',
+                block, re.I)
         title = html.unescape(t.group(1)) if t else ""
-        posts.append({"id": m.group(3), "url": "pending:" + m.group(1), "path": m.group(1), "user": m.group(2),
-                      "tags": [], "title": title,
-                      "text": " ".join([title, m.group(2)] + RATING_RE.findall(block))})
-    has_next = bool(re.search(r'<li class="next"><a', page))
+        ratings = RATING_RE.findall(block)
+        posts.append({
+            "id": pid,
+            "url": "pending:" + path,
+            "path": path,
+            "user": user,
+            "tags": [],
+            "title": title,
+            "text": " ".join([title, user] + ratings),
+        })
+
+    has_next = bool(re.search(
+        r'<li\b[^>]*class\s*=\s*["\'][^"\']*\bnext\b[^"\']*["\'][^>]*>',
+        page, re.I))
     return posts, has_next
+
 
 
 class HentaiFoundrySource(JsonBoardSource):
@@ -58,20 +92,18 @@ class HentaiFoundrySource(JsonBoardSource):
     def __init__(self, cookie="", user_agent=""):
         super().__init__()
         self.cookie = cookie.strip()
-        self.ua = user_agent.strip()      # the browser that passed the check; its pass is tied to that identity
+        self.user_agent = user_agent.strip() or BROWSER_HEADERS["User-Agent"]   # must match the browser that passed
 
     def _headers(self):
         h = dict(BROWSER_HEADERS, Accept="text/html,application/xhtml+xml", Referer=BASE + "/")
-        if self.ua:
-            h["User-Agent"] = self.ua
+        h["User-Agent"] = self.user_agent
         if self.cookie:
             h["Cookie"] = self.cookie
         return h
 
     def _download_headers(self):
         h = dict(BROWSER_HEADERS, Referer=BASE + "/")
-        if self.ua:
-            h["User-Agent"] = self.ua
+        h["User-Agent"] = self.user_agent
         if self.cookie:
             h["Cookie"] = self.cookie
         return h
@@ -97,14 +129,25 @@ class HentaiFoundrySource(JsonBoardSource):
         return posts, (page + 1 if has_next and posts else None)
 
     def _resolve_url(self, post, log):
-        """The thumbnail grid only links to each picture's own page; the full-size file is named there."""
+        """Picture page -> full-size image URL."""
         try:
             text = self._get_page(BASE + post["path"])
         except Exception as ex:
             log(f"   -> couldn't open picture page {post['id']}: {self._explain(ex)}", "warning")
             return None
-        m = (re.search(r'<meta property="og:image" content="([^"]+)"', text)
-             or re.search(r"(?:https?:)?//pictures\.hentai-foundry\.com/[^\"'\s<>]+", text))
+
+        m = re.search(
+            r"""<meta\b(?=[^>]*\bproperty\s*=\s*["']og:image["'])
+            (?=[^>]*\bcontent\s*=\s*["']([^"']+)["'])[^>]*>""",
+            text, re.I | re.X)
+        if not m:
+            m = re.search(
+                r"""(?:https?:)?//pictures\.hentai-foundry\.com/[^"'\s<>]+""",
+                text, re.I)
+        if not m:
+            m = re.search(
+                r"""\b(?:data-original|data-src|src)\s*=\s*["']((?:https?:)?//pictures\.hentai-foundry\.com/[^"']+)["']""",
+                text, re.I)
         if not m:
             log(f"   -> no full-size image found on picture page {post['id']}", "warning")
             return None

@@ -1,49 +1,37 @@
 # Changelog
 
+## v0.1.9
+- **Hentai Foundry: Connect browser.** Settings > Hentai Foundry cookie > *Connect browser* opens your installed Chrome or
+  Edge; pass the bot check yourself and the session's cookies and User-Agent are saved and reused (the User-Agent must
+  match or the cookie is rejected). No extra packages; PCs without Chrome/Edge get an *Install browser component* button.
+  Pasting a Cookie header by hand still works.
+- **Coomer / Kemono**
+  - When the full-size file servers can't be reached (blocked network), images fall back to the site's preview images
+    (saved as `..._preview.jpg`); videos fail fast with a clear log line instead of waiting minutes each.
+  - A bare Coomer username is looked up on OnlyFans, Fansly and CandFans; display names also match the creator list
+    ("Queenofmilk" = "Queen Of Milk"). Fansly creators are addressed by number: paste the page link or `fansly/user/ID`.
+  - New optional Settings fields *Kemono address* / *Coomer address* for when the sites move to a mirror domain.
+  - API and file requests honor Stop within a second and give up after 40 s / 90 s; the log shows each step.
+- Only the media types you tick are downloaded (sources that can skip unwanted types before downloading now do).
+- **Site check:** image results are really downloaded (up to 30 MB) so the results window shows them; videos stay
+  placeholders. A timed-out site keeps its HTTP calls and log lines in the report; sites with no result show their last
+  three log lines. Kemono/Coomer get a longer per-site limit. Probes read 64 KB, not 10 MB.
+- New tools: `tools/site_check.py` (site check without the window, writes `site_check_report.txt`) and
+  `tools/probe_media.py` (why can't this file be fetched? tests IPv4/IPv6 and header sets).
+
+## v0.1.8
+- Site checks probe up to 10 MiB of media instead of 1 KiB.
+- Site checks now have a bounded overall timeout and cannot hang the entire 25-site test indefinitely.
+- Fixed false "fail" results for sources whose site-check item was returned but not sent through `item_cb`.
+- Site-check response reads now have an 8-second idle limit and honor the per-site timeout event.
+- Kemono/Coomer API responses now transparently decode gzip/deflate content.
+- Coomer/Kemono and other site-check probes stop promptly when their per-site timeout is reached.
+
 ## v0.1.7
-- Hentai Foundry: Settings now has **Open browser to sign in** / **Save session**. It opens the site in a Chrome/Edge
-  window with its own profile folder (your everyday browser profile is not read); you pass the bot check yourself, then
-  the program reads that window's cookies and user-agent through the browser's local debugging channel
-  (`core/browser_session.py`, `core/miniws.py`) and sends the same ones. Nothing is solved or faked. Pasting a cookie by
-  hand still works.
-
-## v0.1.6
-- Find now also covers Sex.com (Pics, GIFs; with the site's result count), Wallhaven (count), Erome and Soundgasm
-  (creator name; upload count). Each lookup loads the first results page to confirm something matches; a site that can't
-  be reached is still listed, just without a number. These entries are exempt from "Hide small".
-
-## v0.1.5
-- Download progress is now plain text on the bottom line (no second bar, nothing moves). **Skip file** is red and
-  active while a run is going, greyed out otherwise; it also works while a file is still waiting for the server.
-- New sites: **Sex.com Pics**, **Sex.com GIFs** (first page from the page's own data, later pages from its search API;
-  Most popular / Newest) and **Hentai Foundry** (search grid, then each picture's page for the full-size file).
-  Hentai Foundry blocks scripts with a bot check; the program does not work around it. Paste the Cookie header from your
-  own browser under Settings > Hentai Foundry cookie.
-
-## v0.1.4
-- Big downloads: live bar (`12.3 MB of 75 MB - 1.4 MB/s`) and a **Skip file** button. **Stop** now cuts a download
-  within about a second. New Settings option: skip files over N MB (checked from the size header, before downloading).
-- Duplicates: a new file byte-identical to any file already in the collection (from any site) is removed, and content you
-  delete with the X is never fetched again from another site. Existing files are hashed once and cached.
-- No console window: `run.bat` starts `collector.pyw` (errors go to `collector_crash.log`).
-- HTTP call logging and transient-error retries are now actually switched on in the app (they were only on in tests).
-- Reddit wait note reads "Reddit rate limiting - waiting Ns".
-
-## v0.1.3
-- Find now covers the booru family (Gelbooru, Realbooru, Hypnohub, Rule34, Safebooru, TBIB, Xbooru): tag lookups with
-  post counts, trying each engine's known autocomplete route.
-- Red flashing dot in the footer while Reddit's rate limit makes the program wait ("not a program fault").
-
-## v0.1.2
-- **Check all sites** button: one tiny search per site, results window with status, timing and HTTP details.
-- Version number shown in the title bar, Log header and README.
-- Add box adapts per site: Sort choices, Min score (boorus), Random, Prioritize, default Limit, query hint,
-  pasted-URL cleanup. Limit and Type live beside it; no Apply step.
-- Searches to run: Status symbols plus Site, Query, Sort, Limit, Options columns; Edit, Re-run, context menu.
-- Find: exact subreddit names are checked directly (about.json, then RSS) and shown first; sites that return nothing
-  are named in the status line and the Log.
-- Shared scraper layer updated to AutoPack Builder v0.1.29 (sources 2026.10.05.2): per-site Sort replaces Quality.
-  Only difference: the user-agent says MediaCollector, and Civitai stays off.
-
-## v0.1.1 and earlier
-- Three-column layout, popularity-ranked Find, Log tab with export, always-visible Start/Stop, per-search settings.
+- Site checks now use bounded media probes instead of full media downloads where supported.
+- Site-check HTTP calls are capped and do not retry transient media failures, preventing multi-minute hangs.
+- Coomer/Kemono stop walking every attachment after a failed site-check media probe.
+- Coomer Find -> Match can offer a bare username without the creators endpoint.
+- Kemono non-JSON API replies now include a useful response snippet.
+- Lemmy accepts thumbnail-backed media posts when URL metadata is incomplete.
+- Fapello/Erome site checks probe media without downloading the full file.

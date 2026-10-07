@@ -1,3 +1,5 @@
 # Optional. Only Pillow is used (picture previews). Everything else is the Python standard library.
 Pillow
 # Also optional: ffmpeg (not a pip package) for video preview frames.
+# Settings > Hentai Foundry > Connect browser uses your installed Chrome/Edge: nothing to install.
+# (Only PCs with neither get a button that installs Playwright + Chromium.)

@@ -233,3 +233,55 @@ class BooruSuggestAndWait(unittest.TestCase):
             rl.wait()
         self.assertEqual(seen[0][1], "wait")
         self.assertTrue(seen[0][0].startswith("WAIT|"))
+
+class NewCreatorSources(unittest.TestCase):
+    def test_sources_registered(self):
+        for site in ("kemono", "coomer", "fapello"):
+            self.assertIn(site, SOURCE_BY_ID)
+
+    def test_kemono_and_coomer_api_media(self):
+        posts = [{"post": {"id": "101", "title": "Hello", "file": {"path": "/aa/bb/" + "1"*64 + ".jpg"},
+                           "attachments": [{"path": "/cc/dd/" + "2"*64 + ".mp4", "name": "clip.mp4"}], "content": ""}}]
+        def handler(u):
+            if "/api/v1/" in u:
+                return reply(json.dumps(posts))
+            return img(u)
+        for site in ("kemono", "coomer"):
+            with self.subTest(site=site):
+                items, urls, log, http, got = fetch(site, "patreon/user/abc" if site == "kemono" else "onlyfans/user/abc",
+                                                     handler, limit=2)
+                self.assertEqual(len(items), 2)
+                self.assertEqual(len(got), 2)
+                self.assertTrue(any("/data/aa/bb/" in u for u in urls))
+
+    def test_fapello_model_page_and_media(self):
+        page = '<a href="/model/123/"><img></a><a href="/model/124/"><img></a>'
+        post = '<div class="uk-align-center"><img src="https://cdn.example/model.jpg"></div>'
+        def handler(u):
+            if "/ajax/model/model/page-1/" in u:
+                return reply(page)
+            if "/ajax/model/model/page-2/" in u:
+                return reply("")
+            if "/model/123/" in u:
+                return reply(post.replace("model.jpg", "model123.jpg"))
+            if "/model/124/" in u:
+                return reply(post.replace("model.jpg", "model124.jpg"))
+            return img(u)
+        items, urls, log, http, got = fetch("fapello", "model", handler, limit=2)
+        self.assertEqual(len(items), 2)
+        self.assertTrue(all(i.post_id.startswith("fapello_model_") for i in items))
+
+    def test_fapello_find_returns_direct_model_match(self):
+        found = SOURCE_BY_ID["fapello"].suggest("some_model")
+        self.assertEqual(found[0]["value"], "some_model")
+        self.assertTrue(found[0]["nofilter"])
+
+    def test_coomer_bare_creator_defaults_to_onlyfans(self):
+        from sources.kemono_source import CoomerSource
+        self.assertEqual(CoomerSource._parse_query("soleilretro"), ("onlyfans", "soleilretro"))
+
+    def test_rule34_browser_credentials_are_accepted(self):
+        from sources.booru_extra_sources import Rule34Source
+        s = Rule34Source(cookie="a=b", user_agent="UA/1")
+        self.assertEqual(s._browser_headers()["Cookie"], "a=b")
+        self.assertEqual(s._browser_headers()["User-Agent"], "UA/1")

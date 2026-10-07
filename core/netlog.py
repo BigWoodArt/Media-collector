@@ -29,6 +29,22 @@ def clear_control():
     _local.ctl = None
 
 
+def set_site_check(enabled=True, stop_event=None):
+    """Mark the current worker as a site-check probe. Site checks must never
+    inherit long media-download timeouts or transient retries."""
+    _local.site_check = bool(enabled)
+    _local.site_check_stop = stop_event if enabled else None
+
+
+def clear_site_check():
+    _local.site_check = False
+    _local.site_check_stop = None
+
+
+def is_site_check():
+    return bool(getattr(_local, "site_check", False))
+
+
 _TEXTY = ("json", "text", "xml", "html", "javascript")
 PROGRESS_MIN = 262144        # don't report tiny API replies
 
@@ -53,7 +69,7 @@ class _Stream:
             self._short = True
         except Exception:
             self._short = False
-        self._idle_limit = 30.0
+        self._idle_limit = 8.0 if is_site_check() else 30.0
 
     def __getattr__(self, name):
         return getattr(self._r, name)
@@ -170,6 +186,17 @@ def _is_transient(exc):
 def _wrapped(req, *args, **kwargs):
     url = getattr(req, "full_url", None) or str(req)
     attempt = 0
+    site_check = is_site_check()
+    if site_check:
+        # A site check is a health probe, not a download. Never let a dead
+        # media host consume the normal 20-45 second media timeout.
+        if args:
+            args = list(args)
+            if len(args) >= 2 and isinstance(args[1], (int, float)):
+                args[1] = min(args[1], 8.0)
+            args = tuple(args)
+        if "timeout" in kwargs and isinstance(kwargs["timeout"], (int, float)):
+            kwargs["timeout"] = min(kwargs["timeout"], 8.0)
     while True:
         started = time.time()
         try:
@@ -183,7 +210,7 @@ def _wrapped(req, *args, **kwargs):
                     e.read, e.fp = bio.read, bio   # let later readers still get the body
                 except Exception:
                     pass
-            retry = _is_transient(e) and attempt < len(RETRY_DELAYS)
+            retry = (not site_check) and _is_transient(e) and attempt < len(RETRY_DELAYS)
             _record(url, getattr(e, "code", None), started, e, body, attempt if attempt else None)
             if not retry:
                 raise
@@ -195,6 +222,11 @@ def _wrapped(req, *args, **kwargs):
             status = resp.getcode()
         _record(url, status, started, retry=attempt if attempt else None)
         ctl = getattr(_local, "ctl", None)
+        if ctl is None and site_check:
+            ctl = DownloadControl(
+                getattr(_local, "site_check_stop", None) or threading.Event(),
+                threading.Event(), 0, None
+            )
         return _Stream(resp, ctl, url) if ctl else resp
 
 
