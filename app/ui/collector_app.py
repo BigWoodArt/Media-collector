@@ -73,10 +73,8 @@ class CollectorApp(tk.Tk):
         self.title(f"Media Collector v{settings.APP_VERSION}")
         self.geometry("1320x820")
         self.minsize(1080, 600)
-        self.configure(bg=theme.BG)
+        self.configure(bg=theme.WINDOW_BG)
         theme.apply_theme(self)
-        ttk.Style().configure("TSpinbox", fieldbackground=theme.PANEL_BG, foreground=theme.TEXT_FG,
-                              background=theme.PANEL_BG, arrowcolor=theme.CRIMSON, insertcolor=theme.TEXT_FG)
         self.cfg = settings.load()
         self._running_iids, self._finished_iids = set(), set()
         self._wait_what = ""
@@ -103,42 +101,42 @@ class CollectorApp(tk.Tk):
 
     # ================================================================ layout
     def _build(self):
-        top = ttk.Frame(self)
-        top.pack(side="top", fill="x", padx=12, pady=(10, 4))
-        ttk.Label(top, text="Collection", font=theme.FONT_BOLD).pack(side="left")
+        top = ttk.Frame(self, style="Window.TFrame")
+        top.pack(side="top", fill="x", padx=14, pady=(12, 4))
+        ttk.Label(top, text="Collection", style="Window.TLabel", font=theme.FONT_BOLD).pack(side="left")
         self.col_var = tk.StringVar()
         self.col_box = ttk.Combobox(top, textvariable=self.col_var, width=30)
         self.col_box.pack(side="left", padx=8)
         self.col_box.bind("<<ComboboxSelected>>", lambda e: self._load_collection(self.col_var.get()))
         self.col_box.bind("<Return>", lambda e: self._load_collection(self.col_var.get()))
-        tip(ttk.Button(top, text="New", command=self._new_collection),
+        tip(ttk.Button(top, text="New", style="Plus.TButton", command=self._new_collection),
             "Start a new, empty collection.").pack(side="left")
         tip(self.col_box, "A collection is a themed folder that remembers its searches and what it has fetched. "
                           "Pick one, or type a new name and press Enter.")
-        self.check_btn = tip(ttk.Button(top, text="Check all sites", command=self._check_sites),
+        self.check_btn = tip(ttk.Button(top, text="Check all sites", style="Plus.TButton", command=self._check_sites),
                              "One tiny search per site: shows which sources are live right now.")
         self.check_btn.pack(side="right", padx=(6, 0))
         for text, cmd, hint in (("Settings", self._settings, "Collections folder and site accounts/keys."),
                                 ("Export ZIP", self._export_zip, "Zip the collection's media."),
                                 ("Open folder", self._open_folder, "Show this collection's files.")):
-            tip(ttk.Button(top, text=text, command=cmd), hint).pack(side="right", padx=(6, 0))
+            tip(ttk.Button(top, text=text, style="Plus.TButton", command=cmd), hint).pack(side="right", padx=(6, 0))
 
         # footer first: always visible, whatever the window size
-        foot = ttk.Frame(self)
-        foot.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
+        foot = ttk.Frame(self, style="Window.TFrame")
+        foot.pack(side="bottom", fill="x", padx=14, pady=(4, 12))
         self.progress = ttk.Progressbar(foot, mode="determinate")
         self.progress.pack(fill="x", pady=(0, 6))
-        row = ttk.Frame(foot)
+        row = ttk.Frame(foot, style="Window.TFrame")
         row.pack(fill="x")
-        self.status = ttk.Label(row, text="Ready.", style="Muted.TLabel")
+        self.status = ttk.Label(row, text="Ready.", style="Window.Muted.TLabel")
         self.status.pack(side="left")
         # red flashing dot + note while a site's own rate limit makes us wait (so it's clear it isn't the program)
-        self.wait_lbl = ttk.Label(row, text="", foreground=theme.CRIMSON)
-        self.wait_dot = tk.Canvas(row, width=14, height=14, bg=theme.BG, highlightthickness=0)
+        self.wait_lbl = ttk.Label(row, text="", style="Window.TLabel", foreground=theme.CRIMSON)
+        self.wait_dot = tk.Canvas(row, width=14, height=14, bg=theme.WINDOW_BG, highlightthickness=0)
         self.wait_dot.create_oval(2, 2, 12, 12, fill=theme.CRIMSON, outline="", tags="dot")
         self._wait_until, self._wait_on = 0.0, False
         self.after(500, self._flash_wait)
-        self.start_btn = ttk.Button(row, text="Start", command=self._start)
+        self.start_btn = ttk.Button(row, text="Start", style="Accent.TButton", command=self._start)
         self.start_btn.pack(side="right")
         self.stop_btn = ttk.Button(row, text="Stop", command=self._stop, state="disabled")
         self.stop_btn.pack(side="right", padx=6)
@@ -149,26 +147,29 @@ class CollectorApp(tk.Tk):
                                 "Give up on the search(es) running now (keeps what they already found) and start the next one.")
         self.skip_src_btn.pack(side="right", padx=(0, 6))
         # current-file progress sits inline on this line (fixed width, so nothing shifts when it appears)
-        self.dl_lbl = ttk.Label(row, text="", style="Muted.TLabel", width=46, anchor="e")
+        self.dl_lbl = ttk.Label(row, text="", style="Window.Muted.TLabel", width=46, anchor="e")
         self.dl_lbl.pack(side="right", padx=(0, 10))
 
         self.nb = ttk.Notebook(self)
-        self.nb.pack(side="top", fill="both", expand=True, padx=12, pady=4)
-        collect = ttk.Frame(self.nb)
-        logtab = ttk.Frame(self.nb)
+        self.nb.pack(side="top", fill="both", expand=True, padx=14, pady=4)
+        collect = ttk.Frame(self.nb, style="Window.TFrame")
+        logtab = ttk.Frame(self.nb, style="Window.TFrame")
         self.nb.add(collect, text="Collect")
         self.nb.add(logtab, text="Log")
 
-        pane = tk.PanedWindow(collect, orient="horizontal", bg=theme.BG, sashwidth=6, bd=0, sashrelief="flat")
-        pane.pack(fill="both", expand=True, pady=(6, 0))
-        left, centre, right = ttk.Frame(pane), ttk.Frame(pane), ttk.Frame(pane)
-        pane.add(left, minsize=290, width=330, stretch="never")
-        pane.add(centre, minsize=420, stretch="always")
-        pane.add(right, minsize=240, width=330, stretch="never")
-        self._build_left(left)
-        self._build_centre(centre)
-        self._build_right(right)
-        self._build_log(logtab)
+        pane = tk.PanedWindow(collect, orient="horizontal", bg=theme.WINDOW_BG, sashwidth=14, bd=0,
+                              sashrelief="flat", opaqueresize=True)
+        pane.pack(fill="both", expand=True)
+        cards = [theme.card(pane) for _ in range(3)]
+        pane.add(cards[0][0], minsize=300, width=340, stretch="never")
+        pane.add(cards[1][0], minsize=420, stretch="always")
+        pane.add(cards[2][0], minsize=260, width=340, stretch="never")
+        self._build_left(cards[0][1])
+        self._build_centre(cards[1][1])
+        self._build_right(cards[2][1])
+        lo, li = theme.card(logtab)
+        lo.pack(fill="both", expand=True)
+        self._build_log(li)
 
     # ---------------------------------------------------------------- left: find + add by name
     def _build_left(self, f):
@@ -386,7 +387,7 @@ class CollectorApp(tk.Tk):
         box.pack(fill="both", expand=True, pady=(2, 4))
         cols = (("status", "Status", 100, 70, False), ("site", "Site", 70, 50, False),
                 ("query", "Query", 110, 60, True), ("sort", "Sort", 120, 60, False),
-                ("limit", "Limit", 40, 32, False), ("opts", "Options", 80, 40, False))
+                ("limit", "Limit", 56, 48, False), ("opts", "Options", 80, 40, False))
         self.tree = ttk.Treeview(box, columns=[c[0] for c in cols], show="headings", selectmode="extended", height=4)
         for key, title, w, mw, stretch in cols:
             self.tree.heading(key, text=title)
@@ -426,7 +427,7 @@ class CollectorApp(tk.Tk):
                   style="Muted.TLabel").pack(side="bottom", anchor="w")
         self.caption = ttk.Label(f, text="Downloads appear here.", style="Muted.TLabel", wraplength=380)
         self.caption.pack(side="bottom", anchor="w", pady=(4, 2))
-        self.big = tk.Canvas(f, bg=theme.LOG_BG, highlightthickness=1, highlightbackground=theme.PANEL_BG)
+        self.big = tk.Canvas(f, bg=theme.LOG_BG, highlightthickness=1, highlightbackground=theme.BORDER)
         self.big.pack(side="top", fill="both", expand=True)
         self.big.bind("<Configure>", lambda e: self._schedule_redraw())
 
@@ -441,7 +442,8 @@ class CollectorApp(tk.Tk):
         wrap = ttk.Frame(f)
         wrap.pack(fill="both", expand=True)
         self.log = tk.Text(wrap, bg=theme.LOG_BG, fg=theme.TEXT_FG, insertbackground=theme.TEXT_FG,
-                           font=("Consolas", 9), relief="flat", wrap="none", state="disabled")
+                           font=("Consolas", 9), relief="flat", wrap="none", state="disabled",
+                           highlightthickness=1, highlightbackground=theme.BORDER, highlightcolor=theme.BORDER)
         ys = ttk.Scrollbar(wrap, orient="vertical", command=self.log.yview)
         xs = ttk.Scrollbar(f, orient="horizontal", command=self.log.xview)
         self.log.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
@@ -943,7 +945,7 @@ class CollectorApp(tk.Tk):
             if not self.wait_dot.winfo_manager():
                 self.wait_lbl.pack(side="left", padx=(12, 0))
                 self.wait_dot.pack(side="left", padx=(8, 0), before=self.wait_lbl)
-            self.wait_dot.itemconfig("dot", fill=theme.CRIMSON if self._wait_on else theme.BG)
+            self.wait_dot.itemconfig("dot", fill=theme.CRIMSON if self._wait_on else theme.WINDOW_BG)
             self.wait_lbl.config(text=f"{self._wait_what} - waiting {left:.0f}s")
         elif self.wait_dot.winfo_manager():
             self.wait_dot.pack_forget()
