@@ -55,7 +55,7 @@ Optional accounts/keys go in **Settings** and are stored only in `app/collector_
 
 * **AI-assisted.** This code was written with Claude. Read it: no minified code, no build step; standard library
   plus Pillow only.
-* **Network.** No telemetry, no analytics. The only connections go to the sites you pick, paced to their limits.
+* **Network.** No telemetry, no analytics. The only connections go to the sites you pick, paced to their limits, plus one small request to GitHub at start-up to see if a newer version exists (switch it off in Settings).
   `app/core/netlog.py` records each request (secrets redacted) so you can verify.
 * **Tests.** `python -m unittest discover tests` (inside `app/`) runs offline against simulated replies; CI runs it on every push.
 * **Content guard.** `app/core/safety.py` skips any post or search involving minors. It is intentionally not configurable.
@@ -73,7 +73,7 @@ add it to `app/sources/__init__.py`, and add an offline test beside `app/tests/t
 
 Full details are in `app/CHANGELOG.md`.
 
-* **v0.1.11:** refreshed interface (cards, spacing); PMV Haven and HypnoTube; sites searched side by side; New collection button; grouped site list; Reddit video-thumbnail fix; `app/` folder layout.
+* **v0.1.11:** update check against GitHub; refreshed interface (cards, spacing); PMV Haven and HypnoTube; sites searched side by side; New collection button; grouped site list; Reddit video-thumbnail fix; `app/` folder layout.
 * **v0.1.10:** Files prefixed with their site; one folder per collection; Skip source button; same search can be queued twice; Hentai Foundry Connect browser fixed.
 * **v0.1.9:** Hentai Foundry Connect browser; Coomer/Kemono preview fallback; only ticked media types download; new `site_check` and `probe_media` tools.
 * **v0.1.8:** Site checks time out cleanly; Kemono/Coomer decode gzip replies.

@@ -39,6 +39,7 @@ DEFAULTS = {
     "randomize": False,
     "parallel_sites": 3,    # different sites searched at the same time
     "max_file_mb": 0,       # 0 = no limit
+    "check_updates": True,  # ask GitHub at start-up whether a newer version exists
     "credentials": {},      # {site id: {argument: value}}
     "recent_sources": [],
 }

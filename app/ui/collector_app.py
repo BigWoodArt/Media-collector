@@ -9,11 +9,12 @@ import platform
 import queue
 import sys
 import threading
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import theme
-from core import collector, settings
+from core import collector, settings, updates
 from core.collector import Collection, Job, Options, Pick
 from core.query_clean import clean_query
 from core.thumbs import make_thumb
@@ -89,6 +90,7 @@ class CollectorApp(tk.Tk):
         self.collection = None
         self._suggest_token = 0
         self._suggest_q = queue.Queue()
+        self._update_q = queue.Queue()
         self._check_q = queue.Queue()
         self._check_stop = None
         self._big_photo = None
@@ -98,6 +100,17 @@ class CollectorApp(tk.Tk):
         self._load_collection(self.cfg.get("last_collection") or "My collection")
         self.after(100, self._poll)
         self.after(300, self._first_run_notice)
+        if self.cfg.get("check_updates", True):
+            threading.Thread(target=self._check_update, daemon=True).start()
+
+    def _check_update(self):
+        newer = updates.newer_available(settings.APP_VERSION)
+        if newer:
+            self._update_q.put(newer)
+
+    def _show_update(self, version):
+        self.update_lbl.config(text=f"Update available: v{version}  (click to open GitHub)")
+        self.update_lbl.pack(side="left", padx=(14, 0))
 
     # ================================================================ layout
     def _build(self):
@@ -130,6 +143,8 @@ class CollectorApp(tk.Tk):
         row.pack(fill="x")
         self.status = ttk.Label(row, text="Ready.", style="Window.Muted.TLabel")
         self.status.pack(side="left")
+        self.update_lbl = ttk.Label(row, text="", style="Window.TLabel", foreground=theme.LIGHT_VIOLET, cursor="hand2")
+        self.update_lbl.bind("<Button-1>", lambda e: webbrowser.open(updates.PAGE_URL))
         # red flashing dot + note while a site's own rate limit makes us wait (so it's clear it isn't the program)
         self.wait_lbl = ttk.Label(row, text="", style="Window.TLabel", foreground=theme.CRIMSON)
         self.wait_dot = tk.Canvas(row, width=14, height=14, bg=theme.WINDOW_BG, highlightthickness=0)
@@ -924,6 +939,10 @@ class CollectorApp(tk.Tk):
         except queue.Empty:
             pass
         try:
+            self._show_update(self._update_q.get_nowait())
+        except queue.Empty:
+            pass
+        try:
             while True:
                 self._handle_check(self._check_q.get_nowait())
         except queue.Empty:
@@ -1162,6 +1181,9 @@ class SettingsDialog(tk.Toplevel):
         add_help(r, "How many different sites are searched at the same time, so one slow or rate-limited site "
                     "doesn't hold up the rest. A site's own searches still run one after another. 1 = one at a time.",
                  side="left", padx=8)
+        self.upd_var = tk.BooleanVar(value=bool(cfg.get("check_updates", True)))
+        theme.make_checkbutton(body, "Check GitHub for a newer version when the program starts", self.upd_var).pack(
+            anchor="w", pady=(6, 0))
         ttk.Label(body, text="Accounts and keys are all optional unless noted. Stored only in "
                              "collector_settings.json next to the program.", style="Muted.TLabel",
                   wraplength=560).pack(anchor="w", pady=(8, 2))
@@ -1291,6 +1313,7 @@ class SettingsDialog(tk.Toplevel):
             self.cfg["parallel_sites"] = min(8, max(1, int(self.par_var.get().strip() or 3)))
         except ValueError:
             self.cfg["parallel_sites"] = 3
+        self.cfg["check_updates"] = bool(self.upd_var.get())
         creds = dict(self.cfg.get("credentials") or {})      # keep fields for sites not shown (e.g. disabled ones)
         for (site, arg), var in self.vars.items():
             creds.setdefault(site, {})[arg] = var.get().strip()

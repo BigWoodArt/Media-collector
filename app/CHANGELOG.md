@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.1.11
+- **Update check:** at start-up the program asks GitHub for the latest version and shows "Update available" in the footer (click to open the page). Off switch in Settings.
 - **Interface refresh:** the three columns are now separate cards with gaps between them; flatter buttons, slimmer scrollbars, roomier tables and fields. Same colours.
 - Folder layout: `run.bat`, `collections/` and `app/` (program, tests, tools). Removed unused code (Civitai source, helpers, imports) and trimmed comments.
 - New collection: themed name dialog. Stale `collections` path from a copied app now falls back to this app's own folder.
