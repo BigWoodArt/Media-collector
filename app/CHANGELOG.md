@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.1.11
+- Folder layout: `run.bat`, `collections/` and `app/` (program, tests, tools). Removed unused code (Civitai source, helpers, imports) and trimmed comments.
 - New collection: themed name dialog. Stale `collections` path from a copied app now falls back to this app's own folder.
 - **Site list has headings:** Image boards / Video / Image & mixed / Audio. Find > Match rows for PMV Haven and HypnoTube now start with the site name.
 - **Two new video sites (category "Videos"):**

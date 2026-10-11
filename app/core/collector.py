@@ -621,10 +621,7 @@ def check_sites(credentials=None, on_result=None, stop_event=None, workers=10):
         netlog.set_site_check(True, site_timeout)
         try:
             source = cls(**creds) if creds else cls()
-            # Sources that understand the site-check flag probe the first
-            # media URL instead of downloading the entire file. Older sources
-            # keep their normal behavior, but all HTTP calls are still capped
-            # by netlog's short site-check timeout.
+            # Site check: sources probe the first media URL instead of downloading it.
             source._site_check = True
             resolved = cls.resolve("", "")
             fetched = source.fetch(add_tokens(cls.check_query, resolved.get("query_suffix", "")), 1,
@@ -677,9 +674,7 @@ def check_sites(credentials=None, on_result=None, stop_event=None, workers=10):
     ex = ThreadPoolExecutor(max_workers=workers)
     futures = {ex.submit(wrapped, cls): cls for cls in SOURCE_CLASSES}
     pending = set(futures)
-    # A site check is a diagnostic, not a collection job. No individual site
-    # gets to hold the entire test hostage. 12 seconds also leaves enough room
-    # for a slow API plus one media probe.
+    # Per-site time limit for a site check.
     limits = {c.id: float(getattr(c, "check_timeout", 12.0)) for c in SOURCE_CLASSES}
     deadline = time.time() + (max(limits.values(), default=12.0) + SAMPLE_SECONDS) * max(1, (len(SOURCE_CLASSES) + workers - 1) // workers)
     try:

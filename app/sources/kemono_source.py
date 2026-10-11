@@ -1,9 +1,4 @@
-"""Kemono / Coomer creator scraper for MediaCollector.
-
-The two sites expose the same API family.  This module intentionally uses the
-public API and public media URLs rather than browser automation or access-control
-workarounds.
-"""
+"""Kemono / Coomer creators, through the sites' public API."""
 import gzip
 import hashlib
 import html
@@ -17,7 +12,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from core import netlog
 from sources.base import Source
 from core.media_item import MediaItem
 
@@ -72,7 +66,6 @@ class _KemonoFamily(Source):
     img_root = ""               # preview host: <img_root>/thumbnail/data/... still works where the full-size file servers are blocked
     check_timeout = 45.0        # big creator pages are slow; the site check waits longer for these
     root = ""
-    site_name = ""
     id = ""
     label = ""
     query_hint = "SERVICE/user/CREATOR or creator URL"
@@ -223,10 +216,7 @@ class _KemonoFamily(Source):
         q = query.strip().strip("/")
         if not q:
             return []
-        # The creators endpoint is occasionally blocked even while the post
-        # API works. For an already-structured creator URL, or a bare Coomer
-        # username, we can still offer an exact Find -> Match result without
-        # pretending to know its follower count.
+        # The creators list is sometimes blocked while the post API works: still offer an exact match.
         if cls.id == "coomer" and len([p for p in q.split("/") if p]) == 1 and " " not in q:
             hits, unknown = cls._find_bare(cls.root, q)
             if hits:
@@ -615,7 +605,6 @@ class _KemonoFamily(Source):
 class KemonoSource(_KemonoFamily):
     id = "kemono"
     label = "Kemono"
-    site_name = "kemono"
     root = "https://kemono.cr"
     img_root = "https://img.kemono.cr"
     check_query = "patreon/user/5163822"
@@ -625,7 +614,6 @@ class KemonoSource(_KemonoFamily):
 class CoomerSource(_KemonoFamily):
     id = "coomer"
     label = "Coomer"
-    site_name = "coomer"
     root = "https://coomer.st"
     img_root = "https://img.coomer.st"
     check_query = "onlyfans/user/alinity"

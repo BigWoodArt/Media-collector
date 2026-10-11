@@ -11,7 +11,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from core import netlog
 from sources.base import Source
 from core.media_item import MediaItem
 from core.safety import is_blocked, query_blocked

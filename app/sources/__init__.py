@@ -14,7 +14,6 @@ from sources.danbooru_source import DanbooruSource
 from sources.moebooru_sources import YandereSource, KonachanSource
 from sources.derpibooru_source import DerpibooruSource
 from sources.wallhaven_source import WallhavenSource
-from sources.civitai_source import CivitaiSource   # kept for later; see DISABLED below
 from sources.lemmy_source import LemmySource
 from sources.sexcom_source import SexComPicsSource, SexComGifsSource
 from sources.hentaifoundry_source import HentaiFoundrySource
@@ -32,12 +31,7 @@ SOURCE_CLASSES = [RedditSource, RedgifsSource, SoundgasmSource, FreesoundSource,
                   SexComPicsSource, SexComGifsSource, HentaiFoundrySource,
                   KemonoSource, CoomerSource, FapelloSource,
                   PmvHavenSource, HypnoTubeSource]
-# Civitai is switched off: image search has been down and public search returns models, not tagged images.
-DISABLED_SOURCE_CLASSES = [CivitaiSource]
-SOURCE_BY_LABEL = {c.label: c for c in SOURCE_CLASSES}
-SOURCE_LABELS = [c.label for c in SOURCE_CLASSES]
 SOURCE_BY_ID = {c.id: c for c in SOURCE_CLASSES}
-CATEGORIES = sorted({c.category for c in SOURCE_CLASSES})
 
 
 # The picker lists sites under these headings (a site not named here goes under "Other", last).

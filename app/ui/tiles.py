@@ -7,7 +7,6 @@ try:
 except ImportError:
     HAVE_PIL = False
 
-GLYPH = {"audio": "♪", "video": "▶", "image": "▣"}
 
 
 def placeholder(kind, size):

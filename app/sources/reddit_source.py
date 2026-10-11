@@ -100,7 +100,7 @@ class RedditSource(Source):
             return []
         found = {}
 
-        def add(d, exact=False):
+        def add(d):
             name = d.get("display_name")
             if name and name.lower() not in found:
                 found[name.lower()] = {"value": name, "label": f"Reddit r/{name}",
@@ -113,7 +113,7 @@ class RedditSource(Source):
         for g in dict.fromkeys(x for x in guesses if re.fullmatch(r"\w{2,21}", x)):
             hit = cls._sub_exists(g)
             if hit:
-                add(hit, exact=True)
+                add(hit)
         qs = urllib.parse.urlencode({"q": text, "limit": 8, "include_over_18": "on", "sort": "relevance"})
         data = cls._get_json(f"https://www.reddit.com/subreddits/search.json?{qs}")
         try:

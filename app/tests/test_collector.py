@@ -1,5 +1,4 @@
 """Offline tests for the headless collector: python -m unittest tests.test_collector"""
-import json
 import os
 import queue
 import tempfile

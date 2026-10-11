@@ -1,4 +1,3 @@
-import json
 import tempfile
 import threading
 import unittest
@@ -7,7 +6,6 @@ from unittest import mock
 from core import collector, netlog
 from sources.coomer_source import CoomerSource
 from sources.kemono_source import KemonoSource
-from sources.erome_source import EromeSource
 
 
 class SiteCheckFixes(unittest.TestCase):

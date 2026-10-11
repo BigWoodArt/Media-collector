@@ -1,5 +1,5 @@
 import os, tempfile, unittest
-from core.collector import Pick, _settle, CombinedStop, Job
+from core.collector import Pick, _settle, CombinedStop
 import threading
 
 

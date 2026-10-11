@@ -7,7 +7,6 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-from core import netlog
 from sources.base import Source
 from core.media_item import MediaItem
 

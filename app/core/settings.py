@@ -32,7 +32,7 @@ CRED_FIELDS = [
 CRED_FIELDS = [f for f in CRED_FIELDS if f[1]]
 
 DEFAULTS = {
-    "output_dir": str(APP_DIR / "collections"),
+    "output_dir": str(APP_DIR.parent / "collections"),
     "last_collection": "My collection",
     "limit": 50,
     "types": ["image", "video"],

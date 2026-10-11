@@ -5,8 +5,7 @@ import unittest
 from unittest import mock
 
 from tests._net import fetch, reply, err
-from sources import SOURCE_BY_ID, SOURCE_CLASSES
-from sources.civitai_source import CivitaiSource
+from sources import SOURCE_BY_ID
 from core.safety import is_blocked, query_blocked
 
 
@@ -84,36 +83,6 @@ class Boards(unittest.TestCase):
         items, urls, *_ = self.run_site("wallhaven", h, limit=5, creds={"api_key": "K"})
         self.assertEqual([i.post_id for i in items], ["wh_a1", "wh_b2"])
         self.assertTrue(any("purity=011" in u for u in urls))
-
-    def test_civitai_is_disabled_in_the_app(self):
-        self.assertNotIn("civitai", SOURCE_BY_ID)
-        self.assertNotIn(CivitaiSource, SOURCE_CLASSES)
-
-    @mock.patch.dict(SOURCE_BY_ID, {"civitai": CivitaiSource})
-    def test_civitai_user_cursor_and_prompt_guard(self):
-        pg1 = {"items": [{"id": 1, "url": "https://c/1.jpeg", "meta": {"prompt": "a cat"}},
-                         {"id": 2, "url": "https://c/2.jpeg", "meta": {"prompt": "young girl"}}],
-               "metadata": {"nextCursor": "abc"}}
-        pg2 = {"items": [{"id": 3, "url": "https://c/3.jpeg", "meta": None}], "metadata": {}}
-        def h(u):
-            if "api/v1/images" in u:
-                return reply(json.dumps(pg2 if "cursor=abc" in u else pg1))
-            return img(u)
-        items, urls, *_ = self.run_site("civitai", h, query="user:someone", limit=5, creds={"api_key": "K"})
-        self.assertEqual([i.post_id for i in items], ["cv_1", "cv_3"])
-        self.assertTrue(any("username=someone" in u for u in urls))
-
-    @mock.patch.dict(SOURCE_BY_ID, {"civitai": CivitaiSource})
-    def test_civitai_model_name_lookup(self):
-        def h(u):
-            if "api/v1/models" in u:
-                return reply(json.dumps({"items": [{"id": 42}]}))
-            if "api/v1/images" in u:
-                return reply(json.dumps({"items": [{"id": 8, "url": "https://c/8.jpeg"}], "metadata": {}}))
-            return img(u)
-        items, urls, *_ = self.run_site("civitai", h, query="some model", creds={"api_key": "K"})
-        self.assertEqual(len(items), 1)
-        self.assertTrue(any("modelId=42" in u for u in urls))
 
     def test_lemmy(self):
         data = {"posts": [{"post": {"id": 1, "name": "nice", "url": "https://l/1.jpg", "url_content_type": "image/jpeg"}},

@@ -10,14 +10,14 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox
 
 import theme
 from core import collector, settings
 from core.collector import Collection, Job, Options, Pick
 from core.query_clean import clean_query
 from core.thumbs import make_thumb
-from core.util import open_path, safe_name
+from core.util import open_path
 from sources import SOURCE_CLASSES, SOURCE_BY_ID, grouped_sources
 from ui import tiles
 from ui.test_results import TestResultsWindow
@@ -130,7 +130,6 @@ class CollectorApp(tk.Tk):
         self.progress.pack(fill="x", pady=(0, 6))
         row = ttk.Frame(foot)
         row.pack(fill="x")
-        self._foot_row = row
         self.status = ttk.Label(row, text="Ready.", style="Muted.TLabel")
         self.status.pack(side="left")
         # red flashing dot + note while a site's own rate limit makes us wait (so it's clear it isn't the program)
@@ -223,7 +222,7 @@ class CollectorApp(tk.Tk):
         r1.pack(fill="x", padx=6, pady=(6, 2))
         self.add_site = tk.StringVar(value=SOURCE_CLASSES[0].label)
         # headings between the groups; picking one just selects that group's first site
-        self._heads, values, self._last_site = {}, [], self.add_site.get()
+        self._heads, values = {}, []
         for name, members in grouped_sources():
             head = f"\u2500\u2500 {name} \u2500\u2500"
             self._heads[head] = members[0].label
@@ -295,7 +294,6 @@ class CollectorApp(tk.Tk):
     def _on_site_pick(self):
         if self.add_site.get() in self._heads:
             self.add_site.set(self._heads[self.add_site.get()])
-        self._last_site = self.add_site.get()
         self._on_site_change()
 
     def _on_site_change(self):

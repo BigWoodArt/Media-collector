@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import urllib.parse
 
-from tests._net import fetch, reply, err
+from tests._net import fetch, reply
 from sources import SOURCE_BY_ID
 from core.thumbs import is_static_video, extract_still, FFMPEG_AVAILABLE
 

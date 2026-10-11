@@ -60,10 +60,7 @@ class LemmySource(JsonBoardSource):
             url = p.get("url") or p.get("thumbnail_url") or ""
             ctype = p.get("url_content_type") or ""
             ext = os.path.splitext(url.split("?")[0])[1].lower()
-            # Lemmy sometimes omits url_content_type and uses a CDN URL with
-            # no useful extension. If it supplied a thumbnail, that is still
-            # a concrete media result and is preferable to declaring the
-            # community empty.
+            # No content type and no file extension: fall back to the thumbnail.
             is_media = bool(url and (ext in IMG_EXTS or ctype.startswith(("image/", "video/"))
                                      or p.get("thumbnail_url")))
             if is_media:

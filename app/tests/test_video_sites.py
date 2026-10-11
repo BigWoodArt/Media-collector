@@ -1,5 +1,4 @@
-import os, tempfile, threading, unittest
-from unittest import mock
+import tempfile, threading, unittest
 from sources.pmvhaven_source import PmvHavenSource
 from sources.hypnotube_source import HypnoTubeSource
 

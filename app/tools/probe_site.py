@@ -4,7 +4,6 @@ Reports HTTP status, content type, whether a browser check/login wall is present
 you would open the page yourself. Add your own login cookies with --cookies "name=value; name2=value2"."""
 import argparse
 import re
-import sys
 import urllib.error
 import urllib.request
 

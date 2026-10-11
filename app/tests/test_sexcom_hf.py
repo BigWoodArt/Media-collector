@@ -103,7 +103,7 @@ class FindLookups(unittest.TestCase):
         return mock.patch.object(ur, "urlopen", lambda req, timeout=8: handler(req.full_url))
 
     def test_sexcom_count_none_and_unreachable(self):
-        from tests._net import reply, err
+        from tests._net import reply
         page = RSC.replace('numberOfPages', 'numberOfPages')
         with self._with(lambda u: reply(page.replace('\\"paging\\":{', '\\"paging\\":{'))):
             r = SexComPicsSource.suggest("cat")

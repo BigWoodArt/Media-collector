@@ -85,9 +85,7 @@ class FapelloSource(Source):
             q = parts[0] if parts else ""
         if not q or not re.fullmatch(r"[A-Za-z0-9_.-]+", q):
             return []
-        # Fapello does not expose a useful public model-search API.  Like the
-        # existing Erome source, offer the exact search term as a no-filter
-        # match; the model AJAX endpoint is resolved when the pick runs.
+        # No public model search: offer the typed name as the match.
         entry = {"value": q, "label": f"Fapello {q}", "count": None, "nofilter": True}
         total, full = 0, False
         try:

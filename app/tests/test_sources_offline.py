@@ -11,7 +11,7 @@ import urllib.request
 from unittest import mock
 
 from tests._net import fetch, reply, netlog
-from sources import SOURCE_CLASSES, SOURCE_BY_ID, SOURCES_VERSION
+from sources import SOURCE_CLASSES, SOURCES_VERSION
 from core.thumbs import looks_like_error_page
 
 MD5 = lambda n: f"{n:032x}"

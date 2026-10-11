@@ -62,3 +62,12 @@ class FindLookups(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowserCookieHeader(unittest.TestCase):
+    def test_narrower_cookie_domain_matches_bare_host(self):
+        from core.browser_session import cookie_header
+        cs = [{"name": "techaro.lol-anubis-auth", "value": "a", "domain": "www.hentai-foundry.com"},
+              {"name": "PHPSESSID", "value": "b", "domain": ".hentai-foundry.com"},
+              {"name": "other", "value": "c", "domain": "example.com"}]
+        self.assertEqual(cookie_header(cs, "hentai-foundry.com"), "techaro.lol-anubis-auth=a; PHPSESSID=b")

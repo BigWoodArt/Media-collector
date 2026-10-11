@@ -15,11 +15,9 @@ DISABLED_BG = "#4a2a4a"
 
 FONT_FAMILY = "Segoe UI"
 FONT_NORMAL = (FONT_FAMILY, 9)
-FONT_ITALIC = (FONT_FAMILY, 9, "italic")
 FONT_SMALL = (FONT_FAMILY, 8)
 FONT_BOLD = (FONT_FAMILY, 9, "bold")
 FONT_LABELFRAME = (FONT_FAMILY, 10, "bold")
-FONT_HEADER = (FONT_FAMILY, 16, "bold")
 
 
 def apply_theme(root):
