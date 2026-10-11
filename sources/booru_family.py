@@ -2,6 +2,7 @@
 Per-site settings are class attributes. XML replies are parsed, a missing file_url is rebuilt from directory+image,
 and when the API refuses the website pages are used (list -> post ids, post -> original file URL)."""
 import hashlib
+import html
 import json
 import os
 import re
@@ -139,6 +140,19 @@ class BooruFamilySource(Source):
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
+
+    def _probe(self, url):
+        """Does the file URL answer? Reads only the first 64 KB."""
+        headers = dict(BROWSER_HEADERS)
+        headers["Referer"] = (self.site_url or self.base_url) + "/"
+        headers["Range"] = "bytes=0-65535"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=8) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+                resp.read(65536)
+                return status in (200, 206)
+        except Exception:
+            return False
 
     # ---- api
     def _dapi_url(self, tags, page):
@@ -332,6 +346,21 @@ class BooruFamilySource(Source):
                 media_type = "video" if ext in VIDEO_EXTS else "image"
                 if prioritize_images and media_type == "video" and videos_kept * 4 >= images_kept:
                     continue   # soft cap: skip this post, try the next one
+                wanted = getattr(self, "wanted_types", None)
+                if wanted and media_type not in wanted and not getattr(self, "_site_check", False):
+                    continue   # not a type you ticked: don't download it
+                if getattr(self, "_site_check", False) and media_type == "video":
+                    # A check needs proof the site works, not a whole video: prefer an image, else just probe the file.
+                    videos_seen = getattr(self, "_videos_seen", 0) + 1
+                    self._videos_seen = videos_seen
+                    if videos_seen < 6:
+                        continue
+                    if self._probe(file_url):
+                        results.append(MediaItem(file_path="", caption=f"{tags} result", media_type="video",
+                                                 source_label=f"{self.label}: {tags}", post_id=f"{self.prefix}{post_id}",
+                                                 source_type=self.id, extra={"site_check": True, "probe_url": file_url}))
+                        break
+                    continue
 
                 try:
                     content = self._get_bytes(file_url)
@@ -343,7 +372,7 @@ class BooruFamilySource(Source):
                     continue
                 self.seen_hashes.add(file_hash)
 
-                post_tags = (post.get("tags") or "").split()
+                post_tags = html.unescape(post.get("tags") or "").split()   # tags arrive HTML-escaped (&#039; &gt;)
                 title = ", ".join(post_tags[:6]) if post_tags else f"{tags} post"
                 clean = re.sub(r'[\\/*?:"<>|]', "", title)[:40].strip() or self.id
                 dest_path = os.path.join(dest_dir, f"{clean}_{file_hash[:8]}{ext}")

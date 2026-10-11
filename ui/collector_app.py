@@ -10,7 +10,7 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 
 import theme
 from core import collector, settings
@@ -18,7 +18,7 @@ from core.collector import Collection, Job, Options, Pick
 from core.query_clean import clean_query
 from core.thumbs import make_thumb
 from core.util import open_path, safe_name
-from sources import SOURCE_CLASSES, SOURCE_BY_ID
+from sources import SOURCE_CLASSES, SOURCE_BY_ID, grouped_sources
 from ui import tiles
 from ui.test_results import TestResultsWindow
 from ui.tooltip import add_help, tip
@@ -78,7 +78,7 @@ class CollectorApp(tk.Tk):
         ttk.Style().configure("TSpinbox", fieldbackground=theme.PANEL_BG, foreground=theme.TEXT_FG,
                               background=theme.PANEL_BG, arrowcolor=theme.CRIMSON, insertcolor=theme.TEXT_FG)
         self.cfg = settings.load()
-        self._running_iid = None
+        self._running_iids, self._finished_iids = set(), set()
         self._wait_what = ""
         self._limits = {}
         self._done_total = 0
@@ -111,6 +111,8 @@ class CollectorApp(tk.Tk):
         self.col_box.pack(side="left", padx=8)
         self.col_box.bind("<<ComboboxSelected>>", lambda e: self._load_collection(self.col_var.get()))
         self.col_box.bind("<Return>", lambda e: self._load_collection(self.col_var.get()))
+        tip(ttk.Button(top, text="New", command=self._new_collection),
+            "Start a new, empty collection.").pack(side="left")
         tip(self.col_box, "A collection is a themed folder that remembers its searches and what it has fetched. "
                           "Pick one, or type a new name and press Enter.")
         self.check_btn = tip(ttk.Button(top, text="Check all sites", command=self._check_sites),
@@ -142,8 +144,11 @@ class CollectorApp(tk.Tk):
         self.stop_btn = ttk.Button(row, text="Stop", command=self._stop, state="disabled")
         self.stop_btn.pack(side="right", padx=6)
         self.skip_btn = tip(ttk.Button(row, text="Skip file", command=self._skip, state="disabled"),
-                            "Abandon the file that is downloading right now and carry on with the next one.")
+                            "Abandon the file(s) downloading right now and carry on with the next one.")
         self.skip_btn.pack(side="right")
+        self.skip_src_btn = tip(ttk.Button(row, text="Skip source", command=self._skip_source, state="disabled"),
+                                "Give up on the search(es) running now (keeps what they already found) and start the next one.")
+        self.skip_src_btn.pack(side="right", padx=(0, 6))
         # current-file progress sits inline on this line (fixed width, so nothing shifts when it appears)
         self.dl_lbl = ttk.Label(row, text="", style="Muted.TLabel", width=46, anchor="e")
         self.dl_lbl.pack(side="right", padx=(0, 10))
@@ -217,9 +222,15 @@ class CollectorApp(tk.Tk):
         r1 = ttk.Frame(nb)
         r1.pack(fill="x", padx=6, pady=(6, 2))
         self.add_site = tk.StringVar(value=SOURCE_CLASSES[0].label)
-        cb = ttk.Combobox(r1, textvariable=self.add_site, state="readonly", values=[c.label for c in SOURCE_CLASSES])
+        # headings between the groups; picking one just selects that group's first site
+        self._heads, values, self._last_site = {}, [], self.add_site.get()
+        for name, members in grouped_sources():
+            head = f"\u2500\u2500 {name} \u2500\u2500"
+            self._heads[head] = members[0].label
+            values += [head] + [c.label for c in members]
+        cb = ttk.Combobox(r1, textvariable=self.add_site, state="readonly", values=values)
         cb.pack(fill="x")
-        cb.bind("<<ComboboxSelected>>", lambda e: self._on_site_change())
+        cb.bind("<<ComboboxSelected>>", lambda e: self._on_site_pick())
         self.add_entry = ttk.Entry(nb)
         self.add_entry.pack(fill="x", padx=6, pady=2)
         self.add_entry.bind("<FocusIn>", self._q_focus_in)
@@ -280,6 +291,12 @@ class CollectorApp(tk.Tk):
     @staticmethod
     def _label(key, choices):
         return next((lab for k, lab, _ in choices if k == key), choices[0][1] if choices else "-")
+
+    def _on_site_pick(self):
+        if self.add_site.get() in self._heads:
+            self.add_site.set(self._heads[self.add_site.get()])
+        self._last_site = self.add_site.get()
+        self._on_site_change()
 
     def _on_site_change(self):
         cls = self._cls()
@@ -521,6 +538,14 @@ class CollectorApp(tk.Tk):
                   f"{len(self.collection.seen)} remembered item(s)", "debug")
         self._status(f"Collection '{name}': {len(self.collection.seen)} item(s) remembered.")
 
+    def _new_collection(self):
+        if self._busy():
+            messagebox.showinfo("Busy", "Stop the current run before switching collections.", parent=self)
+            return
+        name = NameDialog(self, "New collection", "Name your new collection.").result
+        if name and name.strip():
+            self._load_collection(name.strip())
+
     def _persist_picks(self):
         self.collection.picks = list(self.rows.values())
         try:
@@ -696,7 +721,7 @@ class CollectorApp(tk.Tk):
 
     # ================================================================ centre column logic
     def _iid(self, pick):
-        return f"{pick.source_id}|{pick.value.strip().lower()}"
+        return "|".join(str(x) for x in pick.key())
 
     def _sort_text(self, p):
         cls = SOURCE_BY_ID.get(p.source_id)
@@ -773,9 +798,7 @@ class CollectorApp(tk.Tk):
 
     def _open_pick_folder(self):
         for iid in self.tree.selection()[:1]:
-            p = self.rows[iid]
-            cls = SOURCE_BY_ID.get(p.source_id)
-            d = os.path.join(self.collection.dir, safe_name(cls.label if cls else p.source_id), safe_name(p.value)[:40])
+            d = self.collection.dir                 # every search saves into the one collection folder
             os.makedirs(d, exist_ok=True)
             open_path(d)
 
@@ -849,7 +872,8 @@ class CollectorApp(tk.Tk):
                                 "or use the Add search box.", parent=self)
             return
         settings.save(self.cfg)
-        opts = Options(limit=self._limit(), types={"image", "video"}, max_mb=int(self.cfg.get("max_file_mb") or 0))
+        opts = Options(limit=self._limit(), types={"image", "video"}, max_mb=int(self.cfg.get("max_file_mb") or 0),
+                       parallel=max(1, int(self.cfg.get("parallel_sites") or 1)))
         self._limits = {self._iid(p): (p.limit or SOURCE_BY_ID[p.source_id].default_limit) for p in picks}
         self._done_total = 0
         self.progress.config(value=0, maximum=max(1, sum(self._limits.values())))
@@ -857,15 +881,21 @@ class CollectorApp(tk.Tk):
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self.skip_btn.config(state="normal")
+        self.skip_src_btn.config(state="normal")
         self._status(f"Running {len(picks)} search(es)...")
         self._log(f"RUN {len(picks)} search(es)", "debug")
-        self._running_iid = None
+        self._running_iids, self._finished_iids = set(), set()
         self.job.start()
 
     def _skip(self):
         if self.job and self._busy():
             self.job.skip_current()
             self._log("skip requested for the current download", "debug")
+
+    def _skip_source(self):
+        if self.job and self._busy():
+            self.job.skip_source()
+            self._log("skip requested for the current source", "debug")
 
     def _show_dl(self, done, total, bps, url):
         if not done and not total:
@@ -943,6 +973,8 @@ class CollectorApp(tk.Tk):
             self.progress.step(1)
         elif kind == "pick_done":
             _, pick, count, status, detail = ev
+            self._running_iids.discard(self._iid(pick))
+            self._finished_iids.add(self._iid(pick))
             self._refresh_row(self._iid(pick))
             self._done_total += self._limits.get(self._iid(pick), 0)
             self.progress.config(value=max(self.progress["value"], min(self._done_total, self.progress["maximum"])))
@@ -952,6 +984,7 @@ class CollectorApp(tk.Tk):
             self.start_btn.config(state="normal")
             self.stop_btn.config(state="disabled")
             self.skip_btn.config(state="disabled")
+            self.skip_src_btn.config(state="disabled")
             self.dl_lbl.config(text="")
             self.progress.config(value=self.progress["maximum"])
             self._status(f"{'Stopped' if ev[2] else 'Finished'}: {ev[1]} new item(s).")
@@ -959,14 +992,14 @@ class CollectorApp(tk.Tk):
 
     # ================================================================ right column: preview + strip
     def _mark_running(self, text):
-        """Progress text ends 'Site: value'; show that row as running."""
+        """Progress text ends 'Site: value'; show that row as running (several can run at once)."""
         for iid, p in self.rows.items():
+            if iid in self._finished_iids:
+                continue
             cls = SOURCE_BY_ID.get(p.source_id)
             if text.endswith(f"{cls.label if cls else p.source_id}: {p.value}"):
-                if iid != self._running_iid:
-                    prev, self._running_iid = self._running_iid, iid
-                    if prev:
-                        self._refresh_row(prev)
+                if iid not in self._running_iids:
+                    self._running_iids.add(iid)
                     self._refresh_row(iid, running=True)
                 return
 
@@ -1066,6 +1099,39 @@ def _ffmpeg():
     return FFMPEG_AVAILABLE
 
 
+class NameDialog(tk.Toplevel):
+    """Themed single-line prompt; .result is the text or None."""
+
+    def __init__(self, parent, title, prompt):
+        super().__init__(parent)
+        self.result = None
+        self.title(title)
+        self.configure(bg=theme.BG)
+        self.resizable(False, False)
+        self.transient(parent)
+        ttk.Label(self, text=prompt).pack(padx=16, pady=(14, 6), anchor="w")
+        self.var = tk.StringVar()
+        e = ttk.Entry(self, textvariable=self.var, width=36)
+        e.pack(padx=16, fill="x")
+        row = ttk.Frame(self)
+        row.pack(padx=16, pady=12, fill="x")
+        ttk.Button(row, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(row, text="OK", command=self._ok).pack(side="right", padx=(0, 6))
+        self.bind("<Return>", lambda _e: self._ok())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + 80
+        self.geometry(f"+{max(x, 0)}+{y}")
+        e.focus_set()
+        self.grab_set()
+        self.wait_window(self)
+
+    def _ok(self):
+        self.result = self.var.get().strip() or None
+        self.destroy()
+
+
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, cfg, on_save):
         super().__init__(parent)
@@ -1088,6 +1154,14 @@ class SettingsDialog(tk.Toplevel):
         ttk.Entry(r, textvariable=self.max_var, width=8).pack(side="left")
         add_help(r, "Files bigger than this are skipped before they finish downloading. 0 = no limit. "
                     "Handy for long videos.", side="left", padx=8)
+        r = ttk.Frame(body)
+        r.pack(fill="x", pady=4)
+        ttk.Label(r, text="Sites at once", width=22).pack(side="left")
+        self.par_var = tk.StringVar(value=str(cfg.get("parallel_sites") or 3))
+        ttk.Spinbox(r, from_=1, to=8, textvariable=self.par_var, width=6).pack(side="left")
+        add_help(r, "How many different sites are searched at the same time, so one slow or rate-limited site "
+                    "doesn't hold up the rest. A site's own searches still run one after another. 1 = one at a time.",
+                 side="left", padx=8)
         ttk.Label(body, text="Accounts and keys are all optional unless noted. Stored only in "
                              "collector_settings.json next to the program.", style="Muted.TLabel",
                   wraplength=560).pack(anchor="w", pady=(8, 2))
@@ -1213,6 +1287,10 @@ class SettingsDialog(tk.Toplevel):
             self.cfg["max_file_mb"] = max(0, int(self.max_var.get().strip() or 0))
         except ValueError:
             self.cfg["max_file_mb"] = 0
+        try:
+            self.cfg["parallel_sites"] = min(8, max(1, int(self.par_var.get().strip() or 3)))
+        except ValueError:
+            self.cfg["parallel_sites"] = 3
         creds = dict(self.cfg.get("credentials") or {})      # keep fields for sites not shown (e.g. disabled ones)
         for (site, arg), var in self.vars.items():
             creds.setdefault(site, {})[arg] = var.get().strip()

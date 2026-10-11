@@ -20,10 +20,17 @@ class MoebooruSource(JsonBoardSource):
 
     @classmethod
     def suggest(cls, query):
-        qs = urllib.parse.urlencode({"name": query.strip().replace(" ", "_"), "order": "count", "limit": 8})
+        q = query.strip().replace(" ", "_").lower()
+        qs = urllib.parse.urlencode({"name_pattern": q, "order": "count", "limit": 30})
         data = cls._suggest_json(f"{cls.base_url}/tag.json?{qs}")
+        rows = [t for t in (data or []) if isinstance(t, dict) and t.get("name") and q in t["name"].lower()]
+        if not rows:                                    # fall back to the exact-name route
+            qs = urllib.parse.urlencode({"name": q, "order": "count", "limit": 8})
+            data = cls._suggest_json(f"{cls.base_url}/tag.json?{qs}")
+            rows = [t for t in (data or []) if isinstance(t, dict) and t.get("name") and q in t["name"].lower()]
+        rows.sort(key=lambda t: (not t["name"].lower().startswith(q), -(t.get("count") or 0)))
         return [{"value": t["name"], "label": f"{cls.label} {t['name']}", "count": t.get("count")}
-                for t in (data or []) if isinstance(t, dict) and t.get("name")]
+                for t in rows[:8]]
 
 
 class YandereSource(MoebooruSource):

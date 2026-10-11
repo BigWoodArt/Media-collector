@@ -57,7 +57,8 @@ def cookie_header(cookies, host):
     parts = []
     for c in cookies:
         dom = (c.get("domain") or "").lstrip(".").lower()
-        if dom and (host == dom or host.endswith("." + dom)):
+        # cookie domain may be broader (.site.com) or narrower (www.site.com) than the host we were given
+        if dom and (host == dom or host.endswith("." + dom) or dom.endswith("." + host)):
             parts.append(f"{c['name']}={c['value']}")
     return "; ".join(parts)
 
@@ -140,6 +141,15 @@ class _WS:
             pass
 
 
+def _debug(line):
+    """Append a diagnostic line (never cookie values) to browser_profile/capture_debug.txt."""
+    try:
+        with open(PROFILE_DIR / "capture_debug.txt", "a", encoding="utf-8") as f:
+            f.write(time.strftime("%H:%M:%S ") + line + "\n")
+    except OSError:
+        pass
+
+
 def _page_state(ws):
     r = ws.call("Runtime.evaluate", {"expression": "document.title+'\\n'+(document.body?document.body.innerText.slice(0,4000):'')"
                                                     "+'\\n'+(document.querySelector('.thumb_square,#header,.navbar')?'SITE_OK':'')",
@@ -147,7 +157,8 @@ def _page_state(ws):
     return r.get("result", {}).get("value", "") or ""
 
 
-def capture_system(url, host, ok_marker, status=lambda msg: None, timeout=300, cancelled=lambda: False):
+def capture_system(url, host, ok_marker, status=lambda msg: None, timeout=300, cancelled=lambda: False,
+                   verify=None):
     exe = find_browser()
     if not exe:
         raise BrowserSessionError("No Chrome or Edge found.")
@@ -161,6 +172,8 @@ def capture_system(url, host, ok_marker, status=lambda msg: None, timeout=300, c
                              "--remote-allow-origins=*", "--no-first-run", "--no-default-browser-check", url],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     ws = None
+    last_title = None
+    last_verify = 0.0
     try:
         end = time.time() + 30
         while not port_file.exists() and time.time() < end:
@@ -187,18 +200,31 @@ def capture_system(url, host, ok_marker, status=lambda msg: None, timeout=300, c
                         ws = _WS("127.0.0.1", port, "/devtools/page/" + tab["id"])
                 if ws:
                     state = _page_state(ws)
+                    title = state.split("\n", 1)[0].strip()
+                    if title != last_title:
+                        last_title = title
+                        status(f"Browser open - page: {title[:60] or '(loading)'}")
+                        _debug(f"page title={title!r} passed={looks_passed(state, ok_marker)} "
+                               f"site_ok={'SITE_OK' in state} len={len(state)}")
                     if looks_passed(state, ok_marker):
                         ua = ws.call("Runtime.evaluate", {"expression": "navigator.userAgent",
                                                            "returnByValue": True})["result"]["value"]
                         ws.call("Network.enable")
-                        header = cookie_header(ws.call("Network.getAllCookies").get("cookies", []), host)
-                        if header:
-                            return {"cookie": header, "user_agent": ua}
-            except BrowserSessionError:
+                        cookies = ws.call("Network.getAllCookies").get("cookies", [])
+                        header = cookie_header(cookies, host)
+                        _debug(f"passed page; cookie names={[c['name'] for c in cookies]} header_len={len(header)}")
+                        if header and (verify is None or time.time() - last_verify >= 3):
+                            last_verify = time.time()
+                            if verify is None or verify(header, ua):
+                                return {"cookie": header, "user_agent": ua}
+                            status("Browser open - almost there: click the site's Enter / confirm button...")
+            except BrowserSessionError as ex:
+                _debug(f"reattach after: {ex}")
                 if ws:
                     ws.close()
                 ws = None       # tab navigated/closed; reattach
-            except (OSError, ValueError):
+            except (OSError, ValueError) as ex:
+                _debug(f"connection problem: {type(ex).__name__}: {ex}")
                 ws = None
             time.sleep(1)
         raise BrowserSessionError("Timed out waiting for the bot check to be passed.")
@@ -223,7 +249,8 @@ def install_fallback(log=lambda m: None):
             raise BrowserSessionError((r.stderr or r.stdout).strip().splitlines()[-1][:200])
 
 
-def capture_playwright(url, host, ok_marker, status=lambda msg: None, timeout=300, cancelled=lambda: False):
+def capture_playwright(url, host, ok_marker, status=lambda msg: None, timeout=300, cancelled=lambda: False,
+                       verify=None):
     """Open url in a visible browser; return {"cookie": header, "user_agent": ua} once the page past the bot check
     (its HTML contains ok_marker) has loaded. Raises BrowserSessionError on failure/timeout/cancel."""
     try:
@@ -251,6 +278,7 @@ def capture_playwright(url, host, ok_marker, status=lambda msg: None, timeout=30
                 pass        # a challenge page may keep loading; keep polling
             status("Browser open - pass the check if it appears...")
             end = time.time() + timeout
+            last_verify = 0.0
             while time.time() < end:
                 if cancelled():
                     raise BrowserSessionError("Cancelled.")
@@ -258,8 +286,11 @@ def capture_playwright(url, host, ok_marker, status=lambda msg: None, timeout=30
                     if looks_passed(page.content(), ok_marker):
                         ua = page.evaluate("navigator.userAgent")
                         header = cookie_header(ctx.cookies(), host)
-                        if header:
-                            return {"cookie": header, "user_agent": ua}
+                        if header and (verify is None or time.time() - last_verify >= 3):
+                            last_verify = time.time()
+                            if verify is None or verify(header, ua):
+                                return {"cookie": header, "user_agent": ua}
+                            status("Browser open - almost there: click the site's Enter / confirm button...")
                 except PWError:
                     pass    # page navigating
                 if not ctx.pages:
@@ -281,7 +312,23 @@ def capture(url, host, ok_marker, **kw):
     raise BrowserSessionError("NEED_FALLBACK")
 
 
+def _hf_verify(header, ua):
+    """True once a plain request with these cookies gets real search results (not the bot check or the Enter page)."""
+    try:
+        req = urllib.request.Request("https://www.hentai-foundry.com/search/index?query=cat",
+                                     headers={"User-Agent": ua, "Cookie": header, "Accept": "text/html",
+                                              "Referer": "https://www.hentai-foundry.com/"})
+        page = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
+    except Exception as ex:
+        _debug(f"verify request failed: {type(ex).__name__}: {ex}")
+        return False
+    ok = "/pictures/user/" in page and "not a bot" not in page.lower()
+    _debug(f"verify: results_found={ok} len={len(page)}")
+    return ok
+
+
 def capture_hentai_foundry(**kw):
+    kw.setdefault("verify", _hf_verify)
     return capture("https://www.hentai-foundry.com/", "hentai-foundry.com", "hentai foundry", **kw)
 
 

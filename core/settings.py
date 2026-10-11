@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.1.9"
+APP_VERSION = "0.1.11"
 APP_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = APP_DIR / "collector_settings.json"
 
@@ -37,6 +37,7 @@ DEFAULTS = {
     "limit": 50,
     "types": ["image", "video"],
     "randomize": False,
+    "parallel_sites": 3,    # different sites searched at the same time
     "max_file_mb": 0,       # 0 = no limit
     "credentials": {},      # {site id: {argument: value}}
     "recent_sources": [],
@@ -52,6 +53,13 @@ def load():
             data.update(saved)
     except (OSError, ValueError):
         pass
+    # A copied/moved app keeps pointing at the old copy's folder: fall back to ours.
+    out = str(data.get("output_dir") or "")
+    default = DEFAULTS["output_dir"]
+    if (not out or not os.path.isabs(out)
+            or (os.path.basename(out.rstrip("\\/")).lower() == "collections"
+                and os.path.normcase(os.path.abspath(out)) != os.path.normcase(os.path.abspath(default)))):
+        data["output_dir"] = default
     if not isinstance(data.get("credentials"), dict):
         data["credentials"] = {}
     return data

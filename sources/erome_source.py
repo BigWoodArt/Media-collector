@@ -54,7 +54,13 @@ class EromeSource(Source):
             return [] if ex.code == 404 else [entry]
         except Exception:
             return [entry]
-        return [entry] if ALBUM_LINK_RE.search(html) else []
+        albums = set(ALBUM_LINK_RE.findall(html))
+        if not albums:
+            return []
+        more = bool(re.search(r'[?&]page=2\b', html))
+        entry["count"] = len(albums)
+        entry["label"] = f"Erome {q} ({len(albums)}{'+' if more else ''} albums)"
+        return [entry]
 
     def __init__(self):
         self._last_request = 0.0

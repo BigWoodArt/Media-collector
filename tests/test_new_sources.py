@@ -272,7 +272,15 @@ class NewCreatorSources(unittest.TestCase):
         self.assertTrue(all(i.post_id.startswith("fapello_model_") for i in items))
 
     def test_fapello_find_returns_direct_model_match(self):
-        found = SOURCE_BY_ID["fapello"].suggest("some_model")
+        import io
+        from unittest import mock
+        page = "".join(f'<a href="https://fapello.com/some_model/{i}/">' for i in range(1, 4)).encode()
+
+        class R(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        with mock.patch("urllib.request.urlopen", lambda *a, **k: R(page)):
+            found = SOURCE_BY_ID["fapello"].suggest("some_model")
         self.assertEqual(found[0]["value"], "some_model")
         self.assertTrue(found[0]["nofilter"])
 

@@ -88,7 +88,30 @@ class FapelloSource(Source):
         # Fapello does not expose a useful public model-search API.  Like the
         # existing Erome source, offer the exact search term as a no-filter
         # match; the model AJAX endpoint is resolved when the pick runs.
-        return [{"value": q, "label": f"Fapello {q}", "count": None, "nofilter": True}]
+        entry = {"value": q, "label": f"Fapello {q}", "count": None, "nofilter": True}
+        total, full = 0, False
+        try:
+            for page_no in (1, 2, 3):
+                req = urllib.request.Request(
+                    f"{ROOT}/ajax/model/{urllib.parse.quote(q, safe='.-_')}/page-{page_no}/",
+                    headers=dict(HEADERS, Referer=ROOT + "/"))
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    page = r.read().decode("utf-8", "ignore")
+                n = len(cls._post_urls(page))
+                total += n
+                full = n >= 10
+                if not full:
+                    break
+        except urllib.error.HTTPError as ex:
+            if ex.code == 404:
+                return []                       # no such model
+        except Exception:
+            return [entry]                      # couldn't check: offer it unconfirmed
+        if total == 0:
+            return []
+        entry["count"] = total
+        entry["label"] = f"Fapello {q} ({total}{'+' if full else ''} posts)"
+        return [entry]
 
     @staticmethod
     def _query(query):

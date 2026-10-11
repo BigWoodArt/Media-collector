@@ -46,6 +46,31 @@ class FreesoundSource(Source):
     query_hint = "tag or keyword (e.g. rain)"
     default_limit = 5
 
+    @classmethod
+    def suggest(cls, query):
+        """Result count for the word, using the API key saved in Settings. No key -> listed, unconfirmed."""
+        q = query.strip()
+        if not q:
+            return []
+        key = ""
+        try:
+            from core import settings
+            key = (settings.credentials_for(settings.load()).get("freesound") or {}).get("api_key", "")
+        except Exception:
+            pass
+        if not key:
+            return [{"value": q, "label": f"Freesound {q} (needs an API key in Settings)",
+                     "count": None, "nofilter": True}]
+        try:
+            qs = urllib.parse.urlencode({"query": q, "token": key, "page_size": 1, "fields": "id"})
+            req = urllib.request.Request("https://freesound.org/apiv2/search/text/?" + qs,
+                                         headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                n = int(json.loads(r.read().decode("utf-8", "ignore")).get("count") or 0)
+        except Exception:
+            return [{"value": q, "label": f"Freesound {q}", "count": None, "nofilter": True}]
+        return [{"value": q, "label": f"Freesound {q}", "count": n}] if n else []
+
     def __init__(self, api_key=""):
         self.api_key = api_key
         self._last_request = 0.0

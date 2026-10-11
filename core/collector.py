@@ -50,7 +50,8 @@ class Pick:
     kept: int = 0       # items kept in the last run
 
     def key(self):
-        return (self.source_id, self.value.strip().lower())
+        # the same search word may be queued more than once with different Order / Min score (Reddit New and Top)
+        return (self.source_id, self.value.strip().lower(), self.order, self.min_score)
 
     def type_set(self):
         return {t for t in self.types.split(",") if t}
@@ -77,6 +78,7 @@ class Options:
     limit: int = 50
     types: set = field(default_factory=lambda: {"image", "video"})   # used when a pick has no types of its own
     max_mb: int = 0                             # skip downloads larger than this (0 = no limit)
+    parallel: int = 1                           # sites searched at the same time (one site's searches stay in order)
 
 
 class Collection:
@@ -92,6 +94,7 @@ class Collection:
         self.hash_cache = {}     # relative path -> [size, mtime, md5], so unchanged files are never re-hashed
         self._by_hash = {}       # md5 -> path of the first copy (duplicate check across all sources)
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
         self._load()
 
     def _path(self):
@@ -116,10 +119,11 @@ class Collection:
             payload = {"seen": sorted(self.seen), "rejected": sorted(self.rejected),
                        "rejected_hashes": sorted(self.rejected_hashes),
                        "picks": [p.to_dict() for p in self.picks], "hashes": dict(self.hash_cache)}
-        tmp = self._path() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        os.replace(tmp, self._path())
+        with self._save_lock:                   # searches finishing together must not share the temp file
+            tmp = self._path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, self._path())
 
     def mark_seen(self, post_id):
         with self._lock:
@@ -143,7 +147,8 @@ class Collection:
         """Hash every media file already in the collection (cached by size+mtime) so a new download that is
         byte-identical to ANY earlier file, from any site, can be recognised. Returns (files, newly_hashed)."""
         found, cache, fresh = {}, {}, 0
-        for base, _, files in os.walk(self.dir):
+        for base, dirs, files in os.walk(self.dir):
+            dirs[:] = [d for d in dirs if d != STAGING]
             for fn in files:
                 if fn == MANIFEST or fn.endswith(".tmp"):
                     continue
@@ -197,7 +202,8 @@ class Collection:
         """Zip the collection's media (not its bookkeeping file). Returns the file count."""
         n = 0
         with zipfile.ZipFile(dest_zip, "w", zipfile.ZIP_STORED) as z:
-            for base, _, files in os.walk(self.dir):
+            for base, dirs, files in os.walk(self.dir):
+                dirs[:] = [d for d in dirs if d != STAGING]
                 for fn in files:
                     if fn == MANIFEST or fn.endswith(".tmp"):
                         continue
@@ -213,6 +219,13 @@ def file_md5(path):
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+class _Ctx:
+    """Skip flags of one running search."""
+    def __init__(self):
+        self.skip_event = threading.Event()
+        self.pick_skip = threading.Event()
 
 
 class CombinedStop:
@@ -239,11 +252,22 @@ class Job:
         self.stop_event = threading.Event()
         self.thread = None
         self.total = 0
-        self.skip_event = threading.Event()
+        self._active = []                       # per-search state of the searches running right now
+        self._lock = threading.Lock()           # guards _active, total and the keep/duplicate decision
+        self._seq = 0
+
+    def skip_source(self):
+        """Give up on the running search(es) (what they already kept stays) and move on to the next one."""
+        with self._lock:
+            for c in self._active:
+                c.pick_skip.set()
+                c.skip_event.set()              # also abandon the file in flight
 
     def skip_current(self):
-        """Abandon the file being downloaded right now and carry on with the next one."""
-        self.skip_event.set()
+        """Abandon the file(s) being downloaded right now and carry on with the next one."""
+        with self._lock:
+            for c in self._active:
+                c.skip_event.set()
 
     def start(self):
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -256,22 +280,53 @@ class Job:
         self.events.put(event)
 
     def _run(self):
-        netlog.set_control(netlog.DownloadControl(
-            self.stop_event, self.skip_event, max(0, int(self.options.max_mb or 0)) * 1048576,
-            lambda done, total, bps, url: self._emit("dl", done, total, bps, url)))
         try:
             try:
                 n, fresh = self.collection.index_hashes(self.stop_event)
                 self._emit("log", f"duplicate check: {n} existing file(s) indexed ({fresh} newly hashed)", "debug")
             except Exception as ex:
                 self._emit("log", f"duplicate indexing failed: {type(ex).__name__}: {ex}", "warning")
+            # One queue per site, in the order the sites first appear: a site's searches stay in order (its rate
+            # limit is respected) while different sites run side by side.
+            groups = {}
             for pick in self.picks:
-                if self.stop_event.is_set():
-                    break
-                self._run_pick(pick)
+                groups.setdefault(pick.source_id, []).append(pick)
+            pending = queue.Queue()
+            for g in groups.values():
+                pending.put(g)
+
+            def worker():
+                while not self.stop_event.is_set():
+                    try:
+                        group = pending.get_nowait()
+                    except queue.Empty:
+                        return
+                    for pick in group:
+                        if self.stop_event.is_set():
+                            break
+                        try:
+                            self._run_pick(pick)
+                        except Exception as ex:             # one broken search must not take the worker down
+                            self._emit("log", f"[{pick.source_id}: {pick.value}] CRITICAL: {type(ex).__name__}: {ex}\n"
+                                              f"{traceback.format_exc()}", "error")
+                            self._emit("pick_done", pick, 0, "failed", f"{type(ex).__name__}: {ex}")
+
+            n = max(1, min(int(self.options.parallel or 1), len(groups) or 1))
+            if n == 1:
+                worker()
+            else:
+                self._emit("log", f"running {len(groups)} site(s), {n} at a time", "debug")
+                threads = [threading.Thread(target=worker, daemon=True) for _ in range(n)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
         finally:
-            netlog.clear_control()
             self._emit("dl", 0, 0, 0.0, "")
+            try:
+                os.rmdir(os.path.join(self.collection.dir, STAGING))
+            except OSError:
+                pass
             try:
                 self.collection.save()
             except OSError as ex:
@@ -285,13 +340,30 @@ class Job:
             self._emit("pick_done", pick, 0, "failed", "unknown site")
             return
         opts = self.options
-        self.skip_event.clear()          # a Skip pressed during the previous search must not hit this one
+        ctx = _Ctx()                     # Skip buttons act on the searches running now, never on a later one
+        with self._lock:
+            self._active.append(ctx)
+            self._seq += 1
+            seq = self._seq
+        netlog.set_control(netlog.DownloadControl(
+            self.stop_event, ctx.skip_event, max(0, int(opts.max_mb or 0)) * 1048576,
+            lambda done, total, bps, url: self._emit("dl", done, total, bps, url)))
+        try:
+            self._run_pick_inner(pick, cls, label, opts, ctx, seq)
+        finally:
+            netlog.clear_control()
+            with self._lock:
+                self._active.remove(ctx)
+
+    def _run_pick_inner(self, pick, cls, label, opts, ctx, seq):
         limit = pick.limit or opts.limit or cls.default_limit
         types = pick.type_set() or opts.types
         resolved = cls.resolve(pick.order, pick.min_score)
         sort, time_range = resolved.get("sort"), resolved.get("time_range")
         query = add_tokens(pick.value, resolved.get("query_suffix", ""))
-        dest = os.path.join(self.collection.dir, safe_name(cls.label), safe_name(pick.value)[:40])
+        # One flat folder per collection (every site, every search). Sources save into a private staging folder;
+        # each kept file is then moved up with a unique name, so two sites' same-named files can't overwrite.
+        dest = os.path.join(self.collection.dir, STAGING, str(seq))     # private per search (searches run side by side)
         os.makedirs(dest, exist_ok=True)
         creds = self.credentials.get(pick.source_id) or {}
         self._emit("log", f"[{label}] START order={pick.order or cls.default_order!r} min_score={pick.min_score!r} limit={limit} -> "
@@ -329,17 +401,19 @@ class Job:
                 _rm(item.file_path)
                 self.collection.mark_seen(item.post_id)     # don't re-download a type you excluded
                 return
-            twin = self.collection.duplicate_of(item.file_path)
-            if twin:
-                skipped["duplicate"] += 1
+            with self._lock:            # settle + duplicate check as one step, so two sites can't both keep one file
+                item.file_path = _settle(item.file_path, self.collection.dir, cls.id)
+                twin = self.collection.duplicate_of(item.file_path)
+                if twin:
+                    skipped["duplicate"] += 1
+                    self.collection.mark_seen(item.post_id)
+                    self._emit("log", f"[{label}] duplicate {item.post_id}: identical to {os.path.relpath(twin, self.collection.dir) if os.path.isabs(twin) else twin}"
+                                      " - removed", "info")
+                    _rm(item.file_path)
+                    return
                 self.collection.mark_seen(item.post_id)
-                self._emit("log", f"[{label}] duplicate {item.post_id}: identical to {os.path.relpath(twin, self.collection.dir) if os.path.isabs(twin) else twin}"
-                                  " - removed", "info")
-                _rm(item.file_path)
-                return
-            self.collection.mark_seen(item.post_id)
-            kept.append(item)
-            self.total += 1
+                kept.append(item)
+                self.total += 1
             self._emit("log", f"[{label}] kept {item.post_id} {item.media_type} "
                               f"{os.path.getsize(item.file_path)} bytes -> {item.file_path}", "debug")
             self._emit("item", pick, item, make_thumb(item.file_path, item.media_type))
@@ -350,7 +424,7 @@ class Job:
         started = time.time()
         try:
             source.fetch(query, limit, sort, time_range, dest, log_cb, progress_cb,
-                         CombinedStop(self.stop_event), None, pick.randomize, pick.prioritize,
+                         CombinedStop(self.stop_event, ctx.pick_skip), None, pick.randomize, pick.prioritize,
                          item_cb=item_cb, skip_ids=self.collection.skip_ids())
         except Exception as ex:                     # a broken site must not stop the other picks
             status, detail = "failed", f"{type(ex).__name__}: {ex}"
@@ -366,7 +440,9 @@ class Job:
             if h.get("body") and (h.get("status") not in (200, 206) or h.get("error")):
                 line += f" body={h['body'][:200]!r}"
             self._emit("log", f"[{label}] {line}", "debug")
-        if status == "done":
+        if ctx.pick_skip.is_set() and not self.stop_event.is_set():
+            status, detail = "stopped", "skipped by you"
+        elif status == "done":
             if self.stop_event.is_set() and len(kept) < limit:
                 status = "stopped"
             elif not kept and errors:
@@ -377,9 +453,39 @@ class Job:
                           if skipped["duplicate"] else "nothing new matched")
         self._emit("log", f"[{label}] END status={status} kept={len(kept)} skipped={skipped} "
                           f"http_calls={len(http)} seconds={time.time() - started:.1f}", "debug")
+        try:
+            for fn in os.listdir(dest):
+                if fn.endswith(".tmp") or not os.path.isdir(os.path.join(dest, fn)):
+                    _rm(os.path.join(dest, fn))         # leftovers of failed or discarded downloads
+            os.rmdir(dest)
+        except OSError:
+            pass
         pick.status, pick.kept = status, len(kept)
         self.collection.save()
         self._emit("pick_done", pick, len(kept), status, detail)
+
+
+STAGING = ".incoming"
+
+
+def _settle(path, folder, prefix=""):
+    """Move a freshly downloaded file from staging into the collection folder (never overwriting).
+    The site id is put in front of the name (xyz.jpg -> reddit_xyz.jpg) so a file's source is obvious."""
+    if not path or not os.path.isfile(path):
+        return path
+    name = os.path.basename(path)
+    if prefix and not name.lower().startswith(prefix.lower() + "_"):
+        name = f"{prefix}_{name}"
+    base, ext = os.path.splitext(name)
+    target, n = os.path.join(folder, name), 1
+    while os.path.exists(target):
+        n += 1
+        target = os.path.join(folder, f"{base}_{n}{ext}")
+    try:
+        os.replace(path, target)
+    except OSError:
+        return path
+    return target
 
 
 def _rm(path):

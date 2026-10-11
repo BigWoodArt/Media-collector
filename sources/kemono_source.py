@@ -236,12 +236,51 @@ class _KemonoFamily(Source):
                 service, creator = cls._parse_query(q)
                 return [{"value": f"{service}/user/{creator}",
                          "label": f"{cls.label} {service}: {creator}", "count": None, "nofilter": True}]
-            return cls._creator_matches(q)          # no exact account: partial matches from the creator list
+            return cls._with_posts(q, cls._creator_matches(q))     # no exact account: partial matches + post search
         if ("/user/" in q.lower()) and len([p for p in q.split("/") if p]) >= 3:
             service, creator = cls._parse_query(q)
             return [{"value": f"{service}/user/{creator}",
                      "label": f"{cls.label} {service}: {creator}", "count": None, "nofilter": True}]
-        return cls._creator_matches(q)
+        return cls._with_posts(q, cls._creator_matches(q))
+
+    @classmethod
+    def _post_matches(cls, query, names=None):
+        """The site's own post search (/api/v1/posts?q=): creators whose posts mention the word."""
+        try:
+            qs = urllib.parse.urlencode({"q": query.strip()})
+            req = urllib.request.Request(f"{cls.root}/api/v1/posts?{qs}", headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=25) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+        except Exception:
+            return []
+        posts = data.get("posts") if isinstance(data, dict) else data
+        if not isinstance(posts, list):
+            return []
+        names = names or {}
+        counts = {}
+        for post in posts:
+            if isinstance(post, dict) and post.get("service") and post.get("user"):
+                key = (str(post["service"]), str(post["user"]))
+                counts[key] = counts.get(key, 0) + 1
+        out = []
+        for (service, cid), n in sorted(counts.items(), key=lambda kv: -kv[1])[:8]:
+            who = names.get((service, cid)) or cid
+            out.append({"value": f"{service}/user/{cid}",
+                        "label": f"{cls.label} {service}: {who} ({n} post{'s' if n != 1 else ''} mention '{query.strip()}')",
+                        "count": None, "nofilter": True})
+        return out
+
+    @classmethod
+    def _with_posts(cls, query, creators):
+        """Creator-name matches first, then creators found through post search (no duplicates)."""
+        cached = CREATOR_CACHE.get(cls.id)
+        names = {}
+        if cached:
+            for c in cached[1]:
+                if isinstance(c, dict):
+                    names[(str(c.get("service")), str(c.get("id")))] = c.get("name")
+        have = {c["value"] for c in creators}
+        return creators + [m for m in cls._post_matches(query, names) if m["value"] not in have]
 
     @classmethod
     def _parse_query(cls, query):
@@ -332,7 +371,10 @@ class _KemonoFamily(Source):
                         raise OSError(f"HTTP {status}")
                     data = b""
                 else:
-                    data = self._request(cand, timeout=15, referer=ref)
+                    if thumb and cand == url:
+                        data = self._within(12.0, self._request, cand, timeout=8, referer=ref)
+                    else:
+                        data = self._request(cand, timeout=15, referer=ref)
             except Exception as ex:
                 last = ex
                 if cand == url and not isinstance(ex, urllib.error.HTTPError):
@@ -352,6 +394,26 @@ class _KemonoFamily(Source):
                 self._node = host.split(".", 1)[0]
             return data, cand
         raise last
+
+    @staticmethod
+    def _within(limit, fn, *a, **kw):
+        """Run fn in a helper thread with a hard deadline (a dead host with several addresses can
+        otherwise cost timeout x addresses)."""
+        box = {}
+
+        def work():
+            try:
+                box["v"] = fn(*a, **kw)
+            except BaseException as ex:         # noqa: BLE001
+                box["e"] = ex
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        t.join(limit)
+        if t.is_alive():
+            raise TimeoutError(f"no answer within {limit:.0f}s")
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
 
     def _get_media_stoppable(self, url, referer, stop_event, probe=False, log=None, limit=90.0):
         """_get_media() in a helper thread: Stop acts within a second and one file can't hang the run."""

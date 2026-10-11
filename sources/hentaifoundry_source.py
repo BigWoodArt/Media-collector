@@ -89,6 +89,34 @@ class HentaiFoundrySource(JsonBoardSource):
     min_score_choices = []
     order_help = "Results are in the site's own search order."
 
+    @classmethod
+    def suggest(cls, query):
+        """Confirm the word with the saved browser session (Settings > Connect browser). Without a working
+        session the word is still listed, marked unconfirmed. Never raises."""
+        q = query.strip()
+        if not q:
+            return []
+        entry = {"value": q, "label": f"Hentai Foundry {q} (connect browser in Settings to confirm)",
+                 "count": None, "nofilter": True}
+        try:
+            from core import settings
+            creds = settings.credentials_for(settings.load()).get("hentaifoundry") or {}
+        except Exception:
+            creds = {}
+        if not creds.get("cookie"):
+            return [entry]
+        try:
+            src = cls(**{k: v for k, v in creds.items() if k in ("cookie", "user_agent")})
+            text = src._get_page(f"{BASE}/search/index?{urllib.parse.urlencode({'query': q})}")
+            posts, has_next = parse_results(text)
+        except Exception:
+            return [entry]
+        if not posts:
+            return []
+        entry["label"] = f"Hentai Foundry {q} ({len(posts)}{'+' if has_next else ''} pictures)"
+        entry["count"] = len(posts)
+        return [entry]
+
     def __init__(self, cookie="", user_agent=""):
         super().__init__()
         self.cookie = cookie.strip()
@@ -114,6 +142,10 @@ class HentaiFoundrySource(JsonBoardSource):
         except urllib.error.HTTPError as ex:
             if ex.code in (401, 403, 429):
                 raise ApiError(BLOCK_HELP + f" (HTTP {ex.code})")
+            raise
+        except (TimeoutError, urllib.error.URLError, OSError) as ex:
+            if not self.cookie:             # the bot check often just stalls an anonymous request
+                raise ApiError(BLOCK_HELP + f" (no answer: {type(ex).__name__})")
             raise
         if "not a bot" in text.lower() and "thumb_square" not in text:
             raise ApiError(BLOCK_HELP)

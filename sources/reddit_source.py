@@ -44,6 +44,7 @@ class RateLimiter:
 
 
 class RedditSource(Source):
+    check_timeout = 40.0        # Reddit paces requests; give the check room
     id = "reddit"
     check_query = "aww"
     category = "Reddit"
@@ -137,9 +138,15 @@ class RedditSource(Source):
         self.seen_hashes = set()
 
     # ---------- networking ----------
+    def _throttle(self, url=""):
+        """Reddit's limit only applies to reddit.com; media hosts (redd.it, i.imgur, redgifs...) are not held back."""
+        host = urllib.parse.urlparse(url).netloc.lower()
+        if not url or host == "reddit.com" or host.endswith(".reddit.com"):
+            self.rate_limiter.wait()
+
     def http_get(self, url, log, retries=2):
         for attempt in range(1, retries + 1):
-            self.rate_limiter.wait()
+            self._throttle(url)
             req = urllib.request.Request(url, headers=BROWSER_HEADERS)
             try:
                 with urllib.request.urlopen(req, timeout=15) as response:
@@ -162,7 +169,7 @@ class RedditSource(Source):
         return None
 
     def http_get_bytes(self, url, referer=None):
-        self.rate_limiter.wait()
+        self._throttle(url)
         headers = dict(BROWSER_HEADERS)
         if referer:
             headers["Referer"] = referer
@@ -171,7 +178,7 @@ class RedditSource(Source):
             return response.read()
 
     def _http_get_text(self, url, extra_headers=None, timeout=15):
-        self.rate_limiter.wait()
+        self._throttle(url)
         headers = dict(BROWSER_HEADERS)
         headers.setdefault("Accept", "application/json")
         if extra_headers:
@@ -274,6 +281,20 @@ class RedditSource(Source):
             log(f"   -> soundgasm resolve error: {ex}", "warning")
             return None
 
+    IMAGE_HOSTS = ("i.redd.it", "preview.redd.it", "imgur.com", "i.imgur.com", "reddit.com", "redd.it")
+    IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+
+    def _thumbnail_ok(self, submission_url, entry):
+        if not submission_url or submission_url == entry.get("link", ""):
+            return True                                   # a post on Reddit itself (image/gallery post)
+        parsed = urllib.parse.urlparse(submission_url)
+        host = parsed.netloc.lower()
+        if host == "v.redd.it":
+            return False
+        if os.path.splitext(parsed.path.lower())[1] in self.IMAGE_EXTS:
+            return True
+        return any(host == h or host.endswith("." + h) for h in self.IMAGE_HOSTS)
+
     def build_candidates(self, entry):
         content_html = entry.get("content_html", "")
         candidates = []
@@ -283,6 +304,8 @@ class RedditSource(Source):
             if any(low.endswith(x) for x in [".jpg", ".jpeg", ".png", ".gif"]):
                 candidates.append((submission_url, os.path.splitext(low)[1],
                                     "direct submission link", "image"))
+            elif low.endswith((".mp4", ".webm", ".mov", ".m4v")):
+                candidates.append((submission_url, os.path.splitext(low)[1], "direct video link", "video"))
             elif low.endswith(".gifv"):
                 candidates.append((submission_url[:-5] + ".mp4", ".mp4",
                                     "gifv link upgraded to mp4", "video"))
@@ -303,7 +326,9 @@ class RedditSource(Source):
                 if audio_url:
                     candidates.append((audio_url, ".m4a", "soundgasm resolved", "audio"))
 
-        if not ("v.redd.it" in (submission_url or "")):
+        # The RSS thumbnail is only a real picture for image posts. For a video or an external page it is the
+        # video's first frame / a link preview, so it is never used as a stand-in.
+        if self._thumbnail_ok(submission_url, entry):
             thumb = self.extract_thumbnail_from_content(content_html)
             if thumb:
                 orig_url, ext = thumb
@@ -398,6 +423,8 @@ class RedditSource(Source):
               item_cb=None, skip_ids=None):
         sub = query.strip().replace("r/", "")
         self.rate_limiter.notify = log
+        if getattr(self, "_site_check", False):
+            self.rate_limiter.min_interval = 1.5          # a check makes only a handful of requests
         os.makedirs(dest_dir, exist_ok=True)
         rss_url = self.build_rss_url(sub, sort or "New", time_range or "month")
         log(f"Fetching RSS feed for r/{sub} ({sort})...")
@@ -442,6 +469,11 @@ class RedditSource(Source):
             if wanted and candidates and (("video" if is_video_post else "image") not in wanted):
                 log(f"[{idx}/{total}] skipped ({'video' if is_video_post else 'image'} not selected): {clean_title}")
                 continue
+            if is_video_post:
+                # never fall back to the post's thumbnail: it is just the video's first frame
+                candidates = [c for c in candidates if c[3] != "image"]
+            if getattr(self, "_site_check", False) and is_video_post:
+                continue                    # a check wants a quick image, not a video
             if prioritize_images and is_video_post and videos_kept * 4 >= images_kept:
                 log(f"[{idx}/{total}] skipped (prioritizing images): {clean_title}")
                 continue

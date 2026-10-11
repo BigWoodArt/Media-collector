@@ -2,6 +2,7 @@
 suggest(); this class does paging, pacing, dedupe, the safety guard, downloading and saving.
 Normalised post: {"id": str, "url": str, "tags": [str], "title": str, "text": str (optional free text)}"""
 import hashlib
+import html
 import json
 import os
 import re
@@ -181,7 +182,7 @@ class JsonBoardSource(Source):
                 if digest in self.seen_hashes:
                     continue
                 self.seen_hashes.add(digest)
-                title = post.get("title") or ", ".join((post.get("tags") or [])[:6]) or f"{query} post"
+                title = html.unescape(post.get("title") or ", ".join((post.get("tags") or [])[:6]) or f"{query} post")
                 clean = re.sub(r'[\\/*?:"<>|]', "", title)[:40].strip() or self.id
                 path = os.path.join(dest_dir, f"{clean}_{digest[:8]}{ext}")
                 if not os.path.exists(path):

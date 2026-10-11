@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.1.11
+- New collection: themed name dialog. Stale `collections` path from a copied app now falls back to this app's own folder.
+- **Site list has headings:** Image boards / Video / Image & mixed / Audio. Find > Match rows for PMV Haven and HypnoTube now start with the site name.
+- **Two new video sites (category "Videos"):**
+  - **PMV Haven** - uses the site's own JSON API. Search words, `tag:Trans`, `creator:Infinite`, or empty for everything.
+    Pick-list shows how many videos each keyword / tag / creator has. Order: newest, most viewed, best rated, most liked
+    (tag / creator / empty lists). Quality: 720p+, 1080p+, 70%+ / 85%+ rating. Downloads the original MP4.
+  - **HypnoTube** - keyword search or `channel:11/hypnosis` (pick-list lists the site's channels with counts). Order: best match,
+    newest, top rated, most viewed. Quality: HD only, 70%+ / 85%+ liked. The site rate-limits searches, so these run slowly (about 3 s per page).
+- **New** button beside Collection: asks "Name your new collection." and opens it empty.
+- **Sites run side by side.** Different sites are searched at the same time (Settings > "Sites at once", default 3,
+  1 = one at a time), so a rate-limited Reddit no longer holds up the rest. One site's own searches still run in
+  order, which keeps its rate limit. Skip file / Skip source act on every search running at that moment.
+- **Reddit first-frame images fixed for good:** the post thumbnail is now used only for image posts. Video links
+  (redgifs, streamable, YouTube, direct mp4...) and external pages never fall back to it, even when the video
+  can't be fetched. Direct .mp4/.webm links are now downloaded as video.
+- Fixed a race when several searches finished together and saved the collection at once.
+- Each search stages its downloads privately; keep/duplicate decisions are made one at a time, so two sites can't
+  both keep the same file.
+
+## v0.1.10
+- **Files are prefixed with their site:** `xyz.jpg` -> `reddit_xyz.jpg`.
+- **Same search can be queued twice** with different Order / Min score (e.g. Reddit New and Top This Month).
+- **Skip source** button beside Skip file: abandons the running search, keeps what it found, moves on.
+- **Reddit:** the 6.5 s pacing now applies only to reddit.com requests (not video/image hosts); video posts no
+  longer fall back to the thumbnail (a first-frame jpeg).
+- **One folder per collection.** Every site and search now saves into the collection's own folder instead of a
+  sub-folder per site/search. Same-named files never overwrite each other, and duplicates across sites are caught
+  as before. Existing sub-folders stay and are still checked for duplicates.
+- **Site check fixes (found on a real PC):** Gelbooru/RealBooru/Safebooru-style sites no longer download whole videos
+  during a check (they take an image or probe the file); Reddit's check no longer times out on its request pacing;
+  Hentai Foundry's stalled request now shows the Connect browser hint.
+- Booru file names no longer contain HTML codes like `&#039;` or `&gt;`.
+- **Hentai Foundry Connect browser fixed:** the cookies were captured but dropped because of a domain mismatch
+  (`www.` vs bare host). The browser flow also now waits until a real request with the captured cookies returns search
+  results, so click the site's *Enter* button and it finishes by itself. The status line shows the page the app sees.
+- Removed the old `collector.py` (use `collector.pyw` or `run.bat`).
+- **Find**
+  - Coomer / Kemono also search the site's own posts: creators whose posts mention your word are listed.
+  - Erome and Fapello show album / post counts (a trailing "+" means more pages exist); an unknown Fapello model is not listed.
+  - Freesound shows its result count (needs the API key from Settings); Hentai Foundry confirms the word once Connect browser is done.
+  - Yande.re / Konachan tag lookup now matches the word as a substring instead of returning the most popular tags.
+- **Coomer / Kemono:** the full-size attempt is capped at 12 s, so the preview fallback starts sooner (was ~53 s).
+- **Large files:** Settings > *Skip files over (MB)* (e.g. 25) skips big videos instantly.
+
 ## v0.1.9
 - **Hentai Foundry: Connect browser.** Settings > Hentai Foundry cookie > *Connect browser* opens your installed Chrome or
   Edge; pass the bot check yourself and the session's cookies and User-Agent are saved and reused (the User-Agent must

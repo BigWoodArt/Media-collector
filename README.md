@@ -1,4 +1,4 @@
-# Media Collector  (v0.1.9)
+# Media Collector  (v0.1.11)
 
 Type a topic, tick the matches, press Start. The program asks each supported site for its own real
 subreddits, tags, communities and creators, downloads what you chose into a themed folder, and shows
@@ -9,7 +9,7 @@ a live preview where one click rejects anything you don't want.
 
 ## Quick start
 1. Install **Python 3.9+** with Tk (Windows/macOS installers include it; Debian/Ubuntu: `sudo apt install python3-tk`).
-2. `python -m pip install -r requirements.txt` (only Pillow, for previews), then `python collector.py`
+2. `python -m pip install -r requirements.txt` (only Pillow, for previews), then `python collector.pyw` (or double-click `run.bat`)
    (Windows: double-click `run.bat`).
 3. Type a topic, press **Find**, tick matches, press **Start**.
 
