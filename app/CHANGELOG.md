@@ -1,10 +1,14 @@
 # Changelog
 
-## v0.1.11
+## v0.1.12
+- **Search... button** under Find: tick which sites Find asks, in a two-column window. Find's status text is shorter to make room.
+- **Redgifs niches:** a typed word now searches the Redgifs niches (curated playlists) that are really about it, then the tag, then a text search that keeps only clips mentioning the word. Find lists niches and the most-used tags. New search forms `niche:<id>` and `tag:<Tag>`.
 - **Update check:** at start-up the program asks GitHub for the latest version and shows "Update available" in the footer (click to open the page). Off switch in Settings.
 - **Interface refresh:** the three columns are now separate cards with gaps between them; flatter buttons, slimmer scrollbars, roomier tables and fields. Same colours.
 - Folder layout: `run.bat`, `collections/` and `app/` (program, tests, tools). Removed unused code (Civitai source, helpers, imports) and trimmed comments.
 - New collection: themed name dialog. Stale `collections` path from a copied app now falls back to this app's own folder.
+
+## v0.1.11
 - **Site list has headings:** Image boards / Video / Image & mixed / Audio. Find > Match rows for PMV Haven and HypnoTube now start with the site name.
 - **Two new video sites (category "Videos"):**
   - **PMV Haven** - uses the site's own JSON API. Search words, `tag:Trans`, `creator:Infinite`, or empty for everything.

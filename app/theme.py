@@ -52,6 +52,8 @@ def apply_theme(root):
                      lightcolor=PANEL_BG, darkcolor=PANEL_BG, borderwidth=1, font=FONT_BOLD, padding=(12, 6))
     style.map("Plus.TButton", background=[("active", VIOLET), ("disabled", PANEL_BG)],
               foreground=[("active", BTN_FG), ("disabled", MUTED)])
+    style.configure("Small.TButton", padding=(8, 2), font=FONT_SMALL)
+    style.map("Small.TButton", background=[("active", VIOLET)], foreground=[("active", BTN_FG)])
 
     # Combobox: explicit state maps; clam otherwise paints readonly widgets white.
     style.configure("TCombobox", fieldbackground=PANEL_BG, background=PANEL_BG,

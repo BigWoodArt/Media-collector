@@ -1,6 +1,11 @@
-"""Redgifs via the public guest API. Search filters by official tag names (tags=Hypno, case matters): a typed word is
-resolved through /v2/search/suggest and results are checked against the tag. Image posts are saved as images;
+"""Redgifs via the public guest API. A typed word goes:
+  1. the niches (Redgifs' curated playlists) that really are about it, shared out evenly;
+  2. else Redgifs' own tag of that name (tags=Hypno, case matters; checked against each result);
+  3. else a text search, keeping only clips whose description or tags hold the word.
+Search forms: word | niche:<id> | tag:<Tag> | a,b (several tags). Image posts are saved as images;
 a photo turned into a looping video becomes a JPEG (needs ffmpeg). Prioritize favours videos."""
+import math
+from collections import Counter
 import os
 import re
 import time
@@ -22,10 +27,41 @@ BROWSER_HEADERS = {
 }
 MIN_REQUEST_INTERVAL = 1.5  # polite pacing — no documented anonymous cap like Reddit's
 PAGE_SIZE = 80
+API = "https://api.redgifs.com"
+MIN_NICHE_GIFS = 20        # a niche with fewer clips is not worth a row
+MAX_NICHES = 3             # niches pulled from for one typed word
+SUGGEST_NICHES = 6
+SUGGEST_TAGS = 6
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 # Valid API orders (not "new"); "score" is what the redgifs.com search page uses.
 ORDER_MAP = {"Score": "score", "Trending": "trending", "Latest": "latest", "Top": "top",
              "Top 7 days": "top7", "Top 28 days": "top28"}
+# gifs/search order -> niche order. The niche API takes only best, hot, latest, oldest ("trending" is refused).
+NICHE_ORDER = {"score": "best", "trending": "hot", "latest": "latest", "top": "best", "top7": "hot", "top28": "best"}
+
+
+def _words_in(gif, word):
+    """True if every word of `word` appears as a whole word (or plural) in the clip's description, title or tags."""
+    text = " ".join([str(gif.get("description") or ""), str(gif.get("title") or "")]
+                    + [str(t) for t in (gif.get("tags") or [])]).lower()
+    return all(re.search(r"\b" + re.escape(w) + r"s?\b", text) for w in word.lower().split())
+
+
+def rank_niches(word, niches):
+    """Niches that are really about `word`, best first. The API's niche search is loose (a search for
+    'hypnotic' also returns 'Seductive'), so a niche must have the word's stem in its name (best) or its tags."""
+    stems = [w[:max(4, len(w) - 3)] for w in word.lower().split() if w]
+    scored = []
+    for n in niches:
+        if not isinstance(n, dict) or not n.get("id") or (n.get("gifs") or 0) < MIN_NICHE_GIFS:
+            continue
+        name = f"{n['id']} {n.get('name') or ''}".lower()
+        tags = " ".join(str(t) for t in (n.get("tags") or [])).lower()
+        score = 2 if any(st in name for st in stems) else 1 if any(st in tags for st in stems) else 0
+        if score:
+            scored.append((score, int(n.get("gifs") or 0), str(n["id"]), str(n.get("name") or n["id"])))
+    scored.sort(key=lambda t: (-t[0], -t[1]))
+    return [{"id": i, "name": nm, "gifs": g} for _, g, i, nm in scored]
 
 
 class RedgifsSource(Source):
@@ -50,28 +86,71 @@ class RedgifsSource(Source):
 
     @classmethod
     def suggest(cls, query):
-        """Redgifs' own tag names for a word, with how many clips carry each."""
+        """Matching niches (with clip counts), Redgifs' own tags, then the tags most used by clips that mention the word."""
         q = query.strip().lstrip("#")
         if not q:
             return []
+        inst = cls()
+        log = lambda *a, **k: None
+        out = [{"value": f"niche:{n['id']}", "label": f"Redgifs niche: {n['name']}", "count": n["gifs"]}
+               for n in inst.find_niches(q, log)[:SUGGEST_NICHES]]
+        have = set()
+        for name, count in inst._tag_suggestions(q, log):
+            have.add(name.lower())
+            out.append({"value": f"tag:{name}", "label": f"Redgifs tag: {name}", "count": count})
+        tags, total = inst.common_tags(q, log)
+        out += [{"value": f"tag:{name}", "label": f"Redgifs tag: {name}  (in {c} of {total} matching clips)", "count": None}
+                for name, c in tags if name.lower() not in have]
+        return out
+
+    # ---- niche and tag lookups
+    def _api(self, path, params, log):
+        token = self._get_token(log)
+        if not token:
+            return None
+        raw = self._get_text(f"{API}{path}?" + urllib.parse.urlencode(params),
+                             extra_headers={"Authorization": f"Bearer {token}"})
+        return json.loads(raw)
+
+    def find_niches(self, word, log):
+        """[{'id','name','gifs'}] that are about `word`, best first. Never raises."""
         try:
-            inst = cls()
-            token = inst._get_token(lambda *a, **k: None)
-            if not token:
-                return []
-            raw = inst._get_text("https://api.redgifs.com/v2/search/suggest?" + urllib.parse.urlencode({"query": q}),
-                                 extra_headers={"Authorization": f"Bearer {token}"})
-            data = json.loads(raw)
+            data = self._api("/v2/niches", {"query": word, "count": 20, "page": 1}, log)
+        except Exception as ex:
+            log(f"[Redgifs] niche lookup failed: {ex}", "warning")
+            return []
+        return rank_niches(word, (data or {}).get("niches", []) if isinstance(data, dict) else [])
+
+    def _tag_suggestions(self, word, log):
+        """[(tag, clip count)] from Redgifs' own tag suggestions. Never raises."""
+        try:
+            data = self._api("/v2/search/suggest", {"query": word}, log)
         except Exception:
             return []
         if isinstance(data, dict):
             data = next((v for v in data.values() if isinstance(v, list)), [])
-        return [{"value": d["text"], "label": f"Redgifs {d['text']}", "count": d.get("gifs")}
-                for d in data if isinstance(d, dict) and d.get("text")]
+        return [(d["text"], d.get("gifs")) for d in data or [] if isinstance(d, dict) and d.get("text")][:SUGGEST_TAGS]
+
+    def common_tags(self, word, log):
+        """([(tag, uses)], clips counted): the tags most used by clips whose own text holds the word."""
+        try:
+            data = self._api("/v2/gifs/search", {"type": "g", "query": word, "order": "score", "count": PAGE_SIZE, "page": 1}, log)
+        except Exception as ex:
+            log(f"[Redgifs] tag lookup failed: {ex}", "warning")
+            return [], 0
+        gifs = [g for g in (data or {}).get("gifs", []) if isinstance(g, dict) and _words_in(g, word)]
+        seen, names = Counter(), {}
+        for g in gifs:
+            for t in {str(t) for t in (g.get("tags") or []) if str(t).strip()}:
+                seen[t.lower()] += 1
+                names.setdefault(t.lower(), t)
+        top = [(names[k], c) for k, c in seen.most_common(SUGGEST_TAGS * 2) if c >= 2][:SUGGEST_TAGS]
+        return top, len(gifs)
 
     def __init__(self):
         self._last_request = 0.0
         self.seen_hashes = set()
+        self.seen_ids = set()
         self._token = None
 
     def _wait(self):
@@ -151,6 +230,46 @@ class RedgifsSource(Source):
     def fetch(self, query, limit, sort, time_range, dest_dir, log, progress, stop_event,
               early_preview_cb=None, randomize=False, prioritize_images=False,
               item_cb=None, skip_ids=None):
+        q = (query or "").strip().lstrip("#")
+        once = [early_preview_cb]
+
+        def preview(items):                       # the early preview fires once, however many niches are searched
+            cb, once[0] = once[0], None
+            if cb:
+                cb(items)
+        rest = (sort, time_range, dest_dir, log, progress, stop_event)
+        kw = dict(early_preview_cb=preview if early_preview_cb else None, randomize=randomize,
+                  prioritize_images=prioritize_images, item_cb=item_cb, skip_ids=skip_ids)
+        low = q.lower()
+        if low.startswith("niche:"):
+            nid = q[6:].strip()
+            return self._fetch_one("niche", nid, limit, *rest, **kw)
+        if low.startswith("tag:"):
+            return self._fetch_one("tags", q[4:].strip(), limit, *rest, **kw)
+        if "," in q or not q:
+            return self._fetch_one("tags", q, limit, *rest, **kw)
+
+        niches = self.find_niches(q, log)[:MAX_NICHES]
+        if niches:
+            log("[Redgifs] niches about '%s': %s" % (q, ", ".join(f"{n['name']} ({n['gifs']})" for n in niches)))
+            results, share = [], math.ceil(limit / len(niches))
+            for n in niches:
+                if stop_event.is_set() or len(results) >= limit:
+                    break
+                results += self._fetch_one("niche", n["id"], min(share, limit - len(results)), *rest, **kw)
+            if results or stop_event.is_set():
+                return results
+            log(f"[Redgifs] the niches gave nothing; trying the tag '{q}'", "warning")
+        results = self._fetch_one("tags", q, limit, *rest, **kw)
+        if results or stop_event.is_set():
+            return results
+        log(f"[Redgifs] no tag '{q}'; searching clip text for the word instead")
+        return self._fetch_one("text", q, limit, *rest, **kw)
+
+    def _fetch_one(self, mode, query, limit, sort, time_range, dest_dir, log, progress, stop_event,
+                   early_preview_cb=None, randomize=False, prioritize_images=False,
+                   item_cb=None, skip_ids=None):
+        """One search. mode: "tags" (Redgifs' tag filter), "niche" (one niche's clips) or "text" (free text)."""
         tag = query.strip().lstrip("#")
         os.makedirs(dest_dir, exist_ok=True)
         token = self._get_token(log)
@@ -160,7 +279,7 @@ class RedgifsSource(Source):
 
         order = ORDER_MAP.get(sort or "Score", "score")
         log(f"Searching Redgifs for '{tag}' ({sort})...")
-        terms = self._resolve_tags(tag, token, log)
+        terms = self._resolve_tags(tag, token, log) if mode == "tags" else [tag]
         strategy = "tags"            # "tags" = what Redgifs' own client sends; "search_text" = old way, last resort
         filter_on = False
 
@@ -168,12 +287,18 @@ class RedgifsSource(Source):
         page = 1
         scanned = 0
         while len(results) < limit and not stop_event.is_set():
-            params = {"type": "g", "order": order, "count": PAGE_SIZE, "page": page}
-            if strategy == "tags":
-                params["tags"] = ",".join(terms)
+            if mode == "niche":
+                url = f"{API}/v2/niches/{urllib.parse.quote(tag, safe='')}/gifs?" + urllib.parse.urlencode(
+                    {"order": NICHE_ORDER.get(order, "best"), "count": PAGE_SIZE, "page": page})
             else:
-                params["search_text"] = tag
-            url = "https://api.redgifs.com/v2/gifs/search?" + urllib.parse.urlencode(params)
+                params = {"type": "g", "order": order, "count": PAGE_SIZE, "page": page}
+                if mode == "text":
+                    params["query"] = tag
+                elif strategy == "tags":
+                    params["tags"] = ",".join(terms)
+                else:
+                    params["search_text"] = tag
+                url = f"{API}/v2/gifs/search?" + urllib.parse.urlencode(params)
             try:
                 try:
                     raw = self._get_text(url, extra_headers={"Authorization": f"Bearer {token}"})
@@ -198,6 +323,12 @@ class RedgifsSource(Source):
                 break
 
             gifs = data.get("gifs", [])
+            raw_count = len(gifs)
+            if mode == "text":                           # the site's text search is loose: keep real mentions only
+                gifs = [g for g in gifs if _words_in(g, tag)]
+                if not gifs and raw_count == PAGE_SIZE and page < 5:
+                    page += 1
+                    continue
             if not gifs:
                 if page == 1 and strategy == "tags" and len(terms) > 1:
                     log(f"No results for all of {terms} together - trying just '{terms[0]}'", "warning")
@@ -207,7 +338,7 @@ class RedgifsSource(Source):
                     log(f"No Redgifs results for '{tag}' (searched {strategy}={','.join(terms) if strategy == 'tags' else tag!r}).",
                         "warning")
                 break
-            hit, listed = self._tag_hits(gifs, terms)
+            hit, listed = self._tag_hits(gifs, terms) if mode == "tags" else (0, 0)
             if listed and hit == 0:
                 if page == 1 and strategy == "tags":
                     log(f"None of the {listed} results carry the tag {terms} - the tags= filter wasn't "
@@ -230,7 +361,7 @@ class RedgifsSource(Source):
                 progress(scanned, max(scanned, limit), "Scanning Redgifs")
 
                 gif_id = gif.get("id", "")
-                if skip_ids and f"rg_{gif_id}" in skip_ids:
+                if (skip_ids and f"rg_{gif_id}" in skip_ids) or gif_id in self.seen_ids:
                     continue
                 if filter_on:                            # keep the search honest: off-topic results are skipped
                     gtags = {str(t).lower() for t in (gif.get("tags") or [])}
@@ -276,6 +407,7 @@ class RedgifsSource(Source):
                 if file_hash in self.seen_hashes:
                     continue
                 self.seen_hashes.add(file_hash)
+                self.seen_ids.add(gif_id)
 
                 if media_type == "video":
                     file_ext = ".mp4"
@@ -317,7 +449,7 @@ class RedgifsSource(Source):
                     early_preview_cb(list(results))
                     early_preview_cb = None
 
-            if len(gifs) < PAGE_SIZE:
+            if raw_count < PAGE_SIZE:
                 break  # last page
             page += 1
 

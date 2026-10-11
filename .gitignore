@@ -7,5 +7,6 @@ app/collector_settings.json
 app/collector_crash.log
 app/browser_profile/
 app/*_report.txt
+app/*_probe.txt
 collections/*
 !collections/.gitkeep

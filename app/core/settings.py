@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-APP_VERSION = "0.1.11"
+APP_VERSION = "0.1.12"
 APP_DIR = Path(__file__).resolve().parent.parent
 SETTINGS_FILE = APP_DIR / "collector_settings.json"
 
@@ -39,6 +39,7 @@ DEFAULTS = {
     "randomize": False,
     "parallel_sites": 3,    # different sites searched at the same time
     "max_file_mb": 0,       # 0 = no limit
+    "find_skip": [],        # site ids left out of Find (Search... button)
     "check_updates": True,  # ask GitHub at start-up whether a newer version exists
     "credentials": {},      # {site id: {argument: value}}
     "recent_sources": [],

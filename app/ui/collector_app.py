@@ -15,7 +15,7 @@ from tkinter import ttk, filedialog, messagebox
 
 import theme
 from core import collector, settings, updates
-from core.collector import Collection, Job, Options, Pick
+from core.collector import Collection, Job, Options, Pick, has_lookup
 from core.query_clean import clean_query
 from core.thumbs import make_thumb
 from core.util import open_path
@@ -211,8 +211,14 @@ class CollectorApp(tk.Tk):
         add_help(r, "Asks every site for its own real matches (subreddits, tags, communities), most popular "
                     "first. Select one or more and press Add →. They use the Limit and Type values below.",
                  side="left", padx=4)
-        self.find_status = ttk.Label(f, text="Type a topic and press Find.", style="Muted.TLabel", wraplength=300)
-        self.find_status.pack(anchor="w", pady=(0, 4))
+        r2 = ttk.Frame(f)
+        r2.pack(fill="x", pady=(0, 4))
+        self.sites_btn = tip(ttk.Button(r2, text="Search...", style="Small.TButton", command=self._pick_find_sites),
+                             "Choose which sites Find asks.")
+        self.sites_btn.pack(side="right")
+        self.find_status = ttk.Label(r2, text="Type a topic, press Find.", style="Muted.TLabel", wraplength=190)
+        self.find_status.pack(side="left", anchor="w")
+        self._update_sites_btn()
 
         box = ttk.Frame(f)
         box.pack(fill="both", expand=True)
@@ -598,17 +604,37 @@ class CollectorApp(tk.Tk):
         q = self.query_var.get().strip()
         if not q:
             return
+        ids = self._find_ids()
+        if not ids:
+            self.find_status.config(text="No sites ticked.")
+            return
         self._suggest_token += 1
         token = self._suggest_token
-        self.find_status.config(text=f"Asking {len(SOURCE_CLASSES)} sites for matches to '{q}'...")
-        self._log(f"find '{q}' (asking {len(SOURCE_CLASSES)} sites)", "debug")
+        self.find_status.config(text=f"Asking {len(ids)} sites...")
+        self._log(f"find '{q}' (asking {len(ids)} sites)", "debug")
 
         reports = []
 
         def work():
-            found = collector.suggest_all(q, report=lambda site, n, secs: reports.append((site, n, secs)))
+            found = collector.suggest_all(q, ids, report=lambda site, n, secs: reports.append((site, n, secs)))
             self._suggest_q.put((token, q, found, reports))
         threading.Thread(target=work, daemon=True).start()
+
+    def _find_ids(self):
+        """Sites Find asks: the ones with a lookup, minus those unticked in Search..."""
+        skip = set(self.cfg.get("find_skip") or [])
+        return [c.id for c in SOURCE_CLASSES if has_lookup(c) and c.id not in skip]
+
+    def _update_sites_btn(self):
+        left, total = len(self._find_ids()), sum(1 for c in SOURCE_CLASSES if has_lookup(c))
+        self.sites_btn.config(text="Search..." if left == total else f"Search... ({left}/{total})")
+
+    def _pick_find_sites(self):
+        dlg = SitePicker(self, set(self.cfg.get("find_skip") or []))
+        if dlg.result is not None:
+            self.cfg["find_skip"] = sorted(dlg.result)
+            settings.save(self.cfg)
+            self._update_sites_btn()
 
     def _show_matches(self, token, q, found, reports=()):
         if token != self._suggest_token:
@@ -635,12 +661,11 @@ class CollectorApp(tk.Tk):
             shown += 1
         hidden = len(self.matches) - shown
         silent = getattr(self, "_silent", [])
-        note = f" No answer from: {', '.join(silent)} (see Log)." if silent else ""
+        note = f" No answer: {', '.join(silent)}." if silent else ""
         if not self.matches:
-            self.find_status.config(text="No matches. Some sites have no lookup: use the Add search box." + note)
+            self.find_status.config(text="No matches." + note)
         else:
-            self.find_status.config(text=f"{shown} match(es), most popular first"
-                                         + (f" ({hidden} small hidden)." if hidden else ".") + note)
+            self.find_status.config(text=f"{shown} matches" + (f", {hidden} small hidden" if hidden else "") + "." + note)
 
     def _new_pick(self, source_id, value, label):
         """A pick from Find: Limit and Type come from the form; Sort/Min score only when it is the form's own site."""
@@ -1116,6 +1141,48 @@ class CollectorApp(tk.Tk):
 def _ffmpeg():
     from core.thumbs import FFMPEG_AVAILABLE
     return FFMPEG_AVAILABLE
+
+
+class SitePicker(tk.Toplevel):
+    """Tick the sites Find should ask, in two columns. .result is the set of UNticked site ids, or None if cancelled."""
+
+    def __init__(self, parent, skipped):
+        super().__init__(parent)
+        self.result = None
+        self.title("Search sites")
+        self.configure(bg=theme.BG)
+        self.resizable(False, False)
+        self.transient(parent)
+        ttk.Label(self, text="Find asks the ticked sites.").pack(padx=16, pady=(14, 6), anchor="w")
+        sites = sorted((c for c in SOURCE_CLASSES if has_lookup(c)), key=lambda c: c.label.lower())
+        self.vars = {c.id: tk.BooleanVar(value=c.id not in skipped) for c in sites}
+        grid = ttk.Frame(self)
+        grid.pack(padx=16, pady=4, anchor="w")
+        half = (len(sites) + 1) // 2
+        for i, c in enumerate(sites):
+            theme.make_checkbutton(grid, c.label, self.vars[c.id]).grid(
+                row=i % half, column=i // half, sticky="w", padx=(0, 28), pady=1)
+        row = ttk.Frame(self)
+        row.pack(padx=16, pady=12, fill="x")
+        ttk.Button(row, text="All", style="Plus.TButton", command=lambda: self._set(True)).pack(side="left")
+        ttk.Button(row, text="None", style="Plus.TButton", command=lambda: self._set(False)).pack(side="left", padx=6)
+        ttk.Button(row, text="Cancel", style="Plus.TButton", command=self.destroy).pack(side="right")
+        ttk.Button(row, text="OK", command=self._ok).pack(side="right", padx=(0, 6))
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        x = parent.winfo_rootx() + 60
+        y = parent.winfo_rooty() + 80
+        self.geometry(f"+{x}+{y}")
+        self.grab_set()
+        self.wait_window(self)
+
+    def _set(self, on):
+        for v in self.vars.values():
+            v.set(on)
+
+    def _ok(self):
+        self.result = {sid for sid, v in self.vars.items() if not v.get()}
+        self.destroy()
 
 
 class NameDialog(tk.Toplevel):

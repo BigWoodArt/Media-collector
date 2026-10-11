@@ -495,6 +495,11 @@ def _rm(path):
         pass
 
 
+def has_lookup(cls):
+    """True if the site has its own Find lookup (suggest)."""
+    return cls.suggest.__func__ is not Source.suggest.__func__
+
+
 def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=80, report=None):
     """Ask every site that supports it for real matches. Returns the most popular first across ALL sites:
     [{"source": id, "site": label, "value", "label", "count"}]. Matches with a known size under min_count are
@@ -509,7 +514,7 @@ def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=8
             found = cls.suggest(query) or []
         except Exception:
             found = []
-        if report and cls.suggest.__func__ is not Source.suggest.__func__:    # only sites that have a lookup
+        if report and has_lookup(cls):                  # only sites that have a lookup
             report(cls.label, len(found), round(time.time() - t0, 1))
         with lock:
             for m in found:

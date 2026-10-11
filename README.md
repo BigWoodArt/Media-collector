@@ -1,4 +1,4 @@
-# Media Collector  (v0.1.11)
+# Media Collector  (v0.1.12)
 
 Type a topic, tick the matches, press Start. The program asks each supported site for subreddits,
 tags, communities and creators, downloads what you chose into a themed folder, and shows
@@ -73,7 +73,8 @@ add it to `app/sources/__init__.py`, and add an offline test beside `app/tests/t
 
 Full details are in `app/CHANGELOG.md`.
 
-* **v0.1.11:** update check against GitHub; refreshed interface (cards, spacing); PMV Haven and HypnoTube; sites searched side by side; New collection button; grouped site list; Reddit video-thumbnail fix; `app/` folder layout.
+* **v0.1.12:** Search... button to pick the sites Find asks; Redgifs niches; update check against GitHub; refreshed interface; `app/` folder layout.
+* **v0.1.11:** PMV Haven and HypnoTube; sites searched side by side; New collection button; grouped site list; Reddit video-thumbnail fix.
 * **v0.1.10:** Files prefixed with their site; one folder per collection; Skip source button; same search can be queued twice; Hentai Foundry Connect browser fixed.
 * **v0.1.9:** Hentai Foundry Connect browser; Coomer/Kemono preview fallback; only ticked media types download; new `site_check` and `probe_media` tools.
 * **v0.1.8:** Site checks time out cleanly; Kemono/Coomer decode gzip replies.

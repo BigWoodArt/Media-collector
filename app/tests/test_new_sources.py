@@ -156,7 +156,7 @@ class Suggest(unittest.TestCase):
                 return reply(json.dumps([{"text": "Hypno", "gifs": 5200}, {"text": "Hypnosis", "gifs": 800}]))
             raise err(u, 404)
         r = self._run(RedgifsSource, h, "hypno")
-        self.assertEqual([(m["value"], m["count"]) for m in r], [("Hypno", 5200), ("Hypnosis", 800)])
+        self.assertEqual([(m["value"], m["count"]) for m in r], [("tag:Hypno", 5200), ("tag:Hypnosis", 800)])
 
     def test_suggest_never_raises_when_the_site_is_down(self):
         from sources.redgifs_source import RedgifsSource
