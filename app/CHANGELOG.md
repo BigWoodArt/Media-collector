@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.1.12
+- **Reddit albums:** a post with several photos now downloads every photo, in album order (was the first only).
 - **Reddit images:** video stills and link previews (small, or Redgifs-watermarked) are no longer saved as images. Pictures under 400 px on the short side are skipped.
 - **Find fixes:** PMV Haven asks its three lookups at once (was one after another, so it could run out of time). HypnoTube now shows about how many videos match instead of "-", and drops a search with no matches. A small site always keeps its two best matches in the list, even when big sites fill the 80-row cap.
 - **Search... button** under Find: tick which sites Find asks, in a two-column window. Find's status text is shorter to make room.

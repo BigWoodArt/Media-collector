@@ -36,3 +36,33 @@ class RedditImageRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RedditGallery(unittest.TestCase):
+    DATA = [{"data": {"children": [{"data": {
+        "gallery_data": {"items": [{"media_id": "b2"}, {"media_id": "a1"}, {"media_id": "z9"}]},
+        "media_metadata": {"a1": {"status": "valid", "m": "image/png"},
+                           "b2": {"status": "valid", "m": "image/jpg"},
+                           "z9": {"status": "failed"}}}}]}}]
+
+    def test_order_and_urls(self):
+        self.assertEqual(RedditSource.parse_gallery(self.DATA),
+                         [("https://i.redd.it/b2.jpg", ".jpg"), ("https://i.redd.it/a1.png", ".png")])
+
+    def test_not_a_gallery(self):
+        self.assertEqual(RedditSource.parse_gallery([{"data": {"children": [{"data": {}}]}}]), [])
+        self.assertEqual(RedditSource.parse_gallery(None), [])
+
+    def test_fetch_downloads_every_photo(self):
+        import tempfile, threading
+        r = RedditSource()
+        r.rate_limiter.min_interval = 0
+        r.http_get = lambda *a, **k: "<feed/>"
+        r.parse_feed = lambda *a: [{"title": "Album", "link": "https://www.reddit.com/r/x/comments/abc/t/",
+            "content_html": '<img src="https://preview.redd.it/b2.jpg"> <a href="https://www.reddit.com/gallery/abc">[link]</a>'}]
+        r.resolve_gallery = lambda pid, log: RedditSource.parse_gallery(self.DATA)
+        r.too_small = staticmethod(lambda c: False)
+        r.http_get_bytes = lambda url, referer=None: url.encode()
+        with tempfile.TemporaryDirectory() as d:
+            out = r.fetch("x", 10, "New", "month", d, lambda *a: None, lambda *a: None, threading.Event())
+        self.assertEqual(len(out), 2)

@@ -271,6 +271,33 @@ class RedditSource(Source):
             log(f"   -> redgifs API error: {ex}", "warning")
             return None
 
+    MIME_EXT = {"image/jpg": ".jpg", "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
+
+    @classmethod
+    def parse_gallery(cls, data):
+        """Photo URLs of a gallery post, in album order, from the post's JSON listing."""
+        try:
+            post = data[0]["data"]["children"][0]["data"]
+            order = [i["media_id"] for i in post["gallery_data"]["items"]]
+            meta = post["media_metadata"]
+        except (KeyError, IndexError, TypeError):
+            return []
+        out = []
+        for mid in order:
+            m = meta.get(mid) or {}
+            ext = cls.MIME_EXT.get(m.get("m", ""))
+            if m.get("status", "valid") == "valid" and ext:
+                out.append((f"https://i.redd.it/{mid}{ext}", ext))
+        return out
+
+    def resolve_gallery(self, post_id, log):
+        try:
+            return self.parse_gallery(json.loads(
+                self._http_get_text(f"https://www.reddit.com/comments/{post_id}.json?raw_json=1")))
+        except Exception as ex:
+            log(f"   -> gallery lookup failed: {ex}", "warning")
+            return []
+
     def resolve_soundgasm(self, soundgasm_url, log):
         """Pull the direct .m4a URL out of a Soundgasm page."""
         try:
@@ -497,6 +524,30 @@ class RedditSource(Source):
                 continue                    # a check wants a quick image, not a video
             if prioritize_images and is_video_post and videos_kept * 4 >= images_kept:
                 log(f"[{idx}/{total}] skipped (prioritizing images): {clean_title}")
+                continue
+
+            gallery = []
+            if post_id and "/gallery/" in (self.extract_submission_link(entry.get("content_html", "")) or ""):
+                gallery = self.resolve_gallery(post_id, log)
+            if gallery:
+                got = 0
+                for g_url, g_ext in gallery:
+                    if stop_event.is_set() or len(results) >= limit:
+                        break
+                    res, path = self.download_one(g_url, g_ext, clean_title, dest_dir, log, check_size=True)
+                    if res == "ok":
+                        got += 1
+                        images_kept += 1
+                        results.append(MediaItem(
+                            file_path=path, caption=title, media_type="image",
+                            source_label=f"r/{sub} via Reddit RSS", post_id=post_id,
+                            source_type="reddit"))
+                        if item_cb is not None:
+                            item_cb(results[-1])
+                        if early_preview_cb is not None and len(results) == 3:
+                            early_preview_cb(list(results))
+                            early_preview_cb = None
+                log(f"[{idx}/{total}] album: {got} of {len(gallery)} photo(s): {clean_title}")
                 continue
 
             result, dest_path, media_type = "fail", None, "image"
