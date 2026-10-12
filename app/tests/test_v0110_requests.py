@@ -51,6 +51,6 @@ class RedditThumbs(unittest.TestCase):
                      "https://youtu.be/x", "https://example.com/article", "https://x.com/v.mp4"):
             self.assertFalse([c for c in self.cands(link) if c[3] == "image"], link)
 
-    def test_image_links_keep_thumbnail_fallback(self):
+    def test_direct_image_link_kept_but_small_thumbnail_never_used(self):
         self.assertTrue(self.cands("https://i.redd.it/a.jpg"))
-        self.assertTrue(self.cands("https://imgur.com/abc"))
+        self.assertFalse([c for c in self.cands("https://imgur.com/abc") if "thumbs" in c[0]])

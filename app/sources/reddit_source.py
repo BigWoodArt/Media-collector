@@ -282,6 +282,8 @@ class RedditSource(Source):
             return None
 
     IMAGE_HOSTS = ("i.redd.it", "preview.redd.it", "imgur.com", "i.imgur.com", "reddit.com", "redd.it")
+    REAL_IMAGE_HOSTS = ("i.redd.it", "i.imgur.com")
+    MIN_IMAGE_PX = 400            # shorter side; smaller "images" are video stills or link previews
     IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
 
     def _thumbnail_ok(self, submission_url, entry):
@@ -335,10 +337,25 @@ class RedditSource(Source):
                 full_url = self.upgrade_to_source_resolution(orig_url)
                 if full_url != orig_url:
                     candidates.append((full_url, ext, "RSS image upgraded to source resolution", "image"))
-                candidates.append((orig_url, ext, "RSS preview image (source unavailable)", "image"))
+                # Only a genuine image host may stand in: preview/external-preview URLs are video stills.
+                if (urllib.parse.urlparse(orig_url).hostname or "") in self.REAL_IMAGE_HOSTS:
+                    candidates.append((orig_url, ext, "RSS image", "image"))
         return candidates
 
-    def download_one(self, media_url, ext, clean_title, dest_dir, log):
+    @classmethod
+    def too_small(cls, content):
+        """True for a picture whose shorter side is under MIN_IMAGE_PX (or a tiny file when PIL is missing)."""
+        try:
+            from PIL import Image
+            import io
+            with Image.open(io.BytesIO(content)) as im:
+                return min(im.size) < cls.MIN_IMAGE_PX
+        except ImportError:
+            return len(content) < 40000
+        except Exception:
+            return False
+
+    def download_one(self, media_url, ext, clean_title, dest_dir, log, check_size=False):
         low = media_url.lower()
         if "redgifs" in low:
             referer = "https://www.redgifs.com/"
@@ -351,6 +368,10 @@ class RedditSource(Source):
             content = self.http_get_bytes(media_url, referer=referer)
         except Exception as ex:
             log(f"   -> failed to fetch file: {str(ex)} [{media_url}]", "warning")
+            return "fail", None
+
+        if check_size and self.too_small(content):
+            log(f"   -> too small to be a real image, skipped [{media_url}]", "warning")
             return "fail", None
 
         file_hash = hashlib.md5(content).hexdigest()
@@ -482,7 +503,8 @@ class RedditSource(Source):
             for url, ext, cand_label, cand_type in candidates:
                 if stop_event.is_set():
                     break
-                result, dest_path = self.download_one(url, ext, clean_title, dest_dir, log)
+                result, dest_path = self.download_one(url, ext, clean_title, dest_dir, log,
+                                                          check_size=(cand_type == "image"))
                 if result in ("ok", "dupe"):
                     media_type = cand_type
                     if result == "ok" and cand_label.startswith("v.redd.it DASH_"):
