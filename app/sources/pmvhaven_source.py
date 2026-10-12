@@ -5,6 +5,7 @@ Search words:  spiral            keyword search (best match)
                (empty)           everything, in the chosen order
 Order and quality only apply to tag / creator / browse lists; the keyword search always answers best match first."""
 import re
+import threading
 import urllib.parse
 
 from core.safety import is_blocked
@@ -47,13 +48,21 @@ class PmvHavenSource(JsonBoardSource):
         if not q:
             return []
         enc = urllib.parse.quote(q)
+        asks = ((q, f"PMV Haven {q}", f"{cls.base_url}/api/videos/search?q={enc}"),
+                (f"tag:{q}", f"PMV Haven {q} (tag)", f"{cls.base_url}/api/videos?limit=1&tags={enc}"),
+                (f"creator:{q}", f"PMV Haven {q} (creator)", f"{cls.base_url}/api/videos?limit=1&creator={enc}"))
+        data = [None] * len(asks)
+
+        def look(i):
+            data[i] = cls._suggest_json(asks[i][2])
+        threads = [threading.Thread(target=look, args=(i,), daemon=True) for i in range(len(asks))]
+        for t in threads:                       # the three questions are independent: ask them together
+            t.start()
+        for t in threads:
+            t.join(10)
         out = []
-        for value, label, url, key in (
-                (q, f"PMV Haven {q}", f"{cls.base_url}/api/videos/search?q={enc}", "total"),
-                (f"tag:{q}", f"PMV Haven {q} (tag)", f"{cls.base_url}/api/videos?limit=1&tags={enc}", "pagination"),
-                (f"creator:{q}", f"PMV Haven {q} (creator)", f"{cls.base_url}/api/videos?limit=1&creator={enc}", "pagination")):
-            data = cls._suggest_json(url)
-            total = ((data or {}).get("pagination") or {}).get("total") or (data or {}).get("total")
+        for (value, label, _), d in zip(asks, data):
+            total = ((d or {}).get("pagination") or {}).get("total") or (d or {}).get("total")
             try:
                 total = int(total)
             except (TypeError, ValueError):

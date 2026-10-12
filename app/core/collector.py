@@ -500,7 +500,7 @@ def has_lookup(cls):
     return cls.suggest.__func__ is not Source.suggest.__func__
 
 
-def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=80, report=None):
+def suggest_all(query, source_ids=None, timeout=15.0, min_count=0, max_results=80, report=None):
     """Ask every site that supports it for real matches. Returns the most popular first across ALL sites:
     [{"source": id, "site": label, "value", "label", "count"}]. Matches with a known size under min_count are
     dropped; matches with no known size go last. A slow or broken site just contributes nothing."""
@@ -539,7 +539,14 @@ def suggest_all(query, source_ids=None, timeout=12.0, min_count=0, max_results=8
     names = {query.strip().lower().lstrip("#"), query.strip().lower().replace(" ", ""),
              query.strip().lower().replace(" ", "_")}
     out.sort(key=lambda r: (str(r["value"]).lower() not in names, r["count"] is None, -(r["count"] or 0)))
-    return out[:max_results]
+    kept, present = out[:max_results], {}               # big sites must not crowd a small site out entirely
+    for r in kept:
+        present[r["source"]] = present.get(r["source"], 0) + 1
+    for r in out[max_results:]:
+        if present.get(r["source"], 0) < 2:
+            kept.append(r)
+            present[r["source"]] = present.get(r["source"], 0) + 1
+    return kept
 
 
 SAMPLE_MAX_BYTES = 30 * 1024 * 1024

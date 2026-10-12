@@ -96,6 +96,43 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class FindCounts(unittest.TestCase):
+    def hypno(self, text=None, exc=None):
+        from unittest import mock
+        search = mock.patch.object(HypnoTubeSource, "_search_html", side_effect=exc, return_value=text)
+        net = mock.patch("urllib.request.urlopen", side_effect=OSError("offline"))
+        with search, net:
+            return HypnoTubeSource.suggest("spiral")
+
+    def test_hypnotube_keyword_count_comes_from_the_pager(self):
+        page = CARD + CARD2 + '<a href="/search/spiral/page2.html">2</a><a href="/search/spiral/page5.html">5</a>'
+        out = self.hypno(page)
+        self.assertEqual((out[0]["value"], out[0]["count"]), ("spiral", 10))     # 2 cards x 5 pages
+        self.assertIn("about", out[0]["label"])
+
+    def test_hypnotube_single_page_count_is_exact(self):
+        self.assertEqual(self.hypno(CARD + CARD2)[0]["count"], 2)
+
+    def test_hypnotube_empty_search_is_not_offered(self):
+        self.assertEqual(self.hypno("<html>nothing</html>"), [])
+
+    def test_hypnotube_unknown_count_still_offers_the_search(self):
+        out = self.hypno(exc=OSError("slow"))
+        self.assertEqual((out[0]["value"], out[0]["count"]), ("spiral", None))
+
+    def test_pmv_asks_three_questions_and_keeps_those_with_results(self):
+        from unittest import mock
+        def gj(url, headers=None):
+            if "videos/search" in url:
+                return {"total": 820}
+            if "tags=" in url:
+                return {"pagination": {"total": 3}}
+            return {"pagination": {"total": 0}}
+        with mock.patch.object(PmvHavenSource, "_suggest_json", side_effect=gj):
+            out = PmvHavenSource.suggest("hypnotic")
+        self.assertEqual([(o["value"], o["count"]) for o in out], [("hypnotic", 820), ("tag:hypnotic", 3)])
+
+
 class Groups(unittest.TestCase):
     def test_every_site_listed_once(self):
         import sources

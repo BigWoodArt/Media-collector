@@ -60,7 +60,18 @@ class HypnoTubeSource(JsonBoardSource):
         q = (query or "").strip().lower()
         if not q:
             return []
-        out = [{"value": query.strip(), "label": f"HypnoTube {query.strip()}", "count": None, "nofilter": True}]
+        out = []
+        count, label = None, f"HypnoTube {query.strip()}"
+        try:                                    # one search tells us roughly how many videos match
+            text = cls()._search_html(query.strip(), "", 1)
+            shown = len(cls._cards(text))
+            last = max([int(n) for n in re.findall(r"page(\d+)\.html", text)] or [1])
+            count = shown * last if last > 1 else shown
+            label += " (about)" if last > 1 else ""
+        except Exception:
+            pass
+        if count != 0:                          # a search that finds nothing is not offered
+            out.append({"value": query.strip(), "label": label, "count": count, "nofilter": True})
         try:
             req = urllib.request.Request(cls.base_url + "/channels/", headers={"User-Agent": _UA})
             with urllib.request.urlopen(req, timeout=8) as r:
