@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.1.12
+- **New sites:** PornPics and Babehub (`sources/gallery_sites.py`). Search, open each gallery, download every picture inside; tags and a minimum rating. No date on either site. Both are in Find > Match: Babehub lists matching tags, models and channels with counts plus galleries; PornPics lists tags and galleries. Babehub searches use its tag, model and channel pages (its own search box only returns the home page).
 - **Reddit albums:** a post with several photos now downloads every photo, in album order (was the first only).
 - **Reddit images:** video stills and link previews (small, or Redgifs-watermarked) are no longer saved as images. Pictures under 400 px on the short side are skipped.
 - **Find fixes:** PMV Haven asks its three lookups at once (was one after another, so it could run out of time). HypnoTube now shows about how many videos match instead of "-", and drops a search with no matches. A small site always keeps its two best matches in the list, even when big sites fill the 80-row cap.

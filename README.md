@@ -47,7 +47,7 @@ reports; **Export log** saves it (API keys are never written to it).
 
 Reddit, Redgifs, Soundgasm, Freesound, Erome, Gelbooru, Realbooru, Hypnohub, Rule34, Safebooru, TBIB, Xbooru,
 e621, Danbooru, Yande.re, Konachan, Derpibooru, Wallhaven, Lemmy, Sex.com (Pics, GIFs),
-Hentai Foundry (needs your browser cookie), Kemono, Coomer, Fapello, PMV Haven, HypnoTube.
+Hentai Foundry (needs your browser cookie), Kemono, Coomer, Fapello, PMV Haven, HypnoTube, PornPics, Babehub.
 
 Optional accounts/keys go in **Settings** and are stored only in `app/collector_settings.json`.
 
@@ -73,7 +73,7 @@ add it to `app/sources/__init__.py`, and add an offline test beside `app/tests/t
 
 Full details are in `app/CHANGELOG.md`.
 
-* **v0.1.12:** Search... button to pick the sites Find asks; Redgifs niches; update check against GitHub; refreshed interface; `app/` folder layout. Reddit image-only searches no longer save video stills or small previews.
+* **v0.1.12:** Search... button to pick the sites Find asks; Redgifs niches; update check against GitHub; refreshed interface; `app/` folder layout. Reddit image-only searches no longer save video stills or small previews. PornPics and Babehub added.
 * **v0.1.11:** PMV Haven and HypnoTube; sites searched side by side; New collection button; grouped site list; Reddit video-thumbnail fix.
 * **v0.1.10:** Files prefixed with their site; one folder per collection; Skip source button; same search can be queued twice; Hentai Foundry Connect browser fixed.
 * **v0.1.9:** Hentai Foundry Connect browser; Coomer/Kemono preview fallback; only ticked media types download; new `site_check` and `probe_media` tools.

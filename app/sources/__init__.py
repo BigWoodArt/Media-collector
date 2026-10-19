@@ -1,4 +1,4 @@
-SOURCES_VERSION = "2026.10.11.1"   # bump on any change to the shared scraper files
+SOURCES_VERSION = "2026.10.19.1"   # bump on any change to the shared scraper files
 
 from sources.reddit_source import RedditSource
 from sources.redgifs_source import RedgifsSource
@@ -22,6 +22,7 @@ from sources.coomer_source import CoomerSource
 from sources.fapello_source import FapelloSource
 from sources.pmvhaven_source import PmvHavenSource
 from sources.hypnotube_source import HypnoTubeSource
+from sources.gallery_sites import PornPicsSource, BabehubSource
 
 SOURCE_CLASSES = [RedditSource, RedgifsSource, SoundgasmSource, FreesoundSource, EromeSource,
                   GelbooruSource, RealbooruSource, HypnohubSource,
@@ -30,7 +31,8 @@ SOURCE_CLASSES = [RedditSource, RedgifsSource, SoundgasmSource, FreesoundSource,
                   WallhavenSource, LemmySource,
                   SexComPicsSource, SexComGifsSource, HentaiFoundrySource,
                   KemonoSource, CoomerSource, FapelloSource,
-                  PmvHavenSource, HypnoTubeSource]
+                  PmvHavenSource, HypnoTubeSource,
+                  PornPicsSource, BabehubSource]
 SOURCE_BY_ID = {c.id: c for c in SOURCE_CLASSES}
 
 
@@ -40,7 +42,7 @@ SOURCE_GROUPS = [
                       "e621", "danbooru", "yandere", "konachan", "derpibooru"]),
     ("Video", ["pmvhaven", "hypnotube", "redgifs", "sexcom_gifs"]),
     ("Image / mixed", ["reddit", "wallhaven", "hentaifoundry", "sexcom_pics", "kemono", "coomer", "fapello",
-                       "erome", "lemmy"]),
+                       "erome", "lemmy", "pornpics", "babehub"]),
     ("Audio", ["soundgasm", "freesound"]),
 ]
 

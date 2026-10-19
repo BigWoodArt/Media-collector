@@ -8,5 +8,6 @@ app/collector_crash.log
 app/browser_profile/
 app/*_report.txt
 app/*_probe.txt
+app/page_dump*.txt
 collections/*
 !collections/.gitkeep
