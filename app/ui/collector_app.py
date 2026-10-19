@@ -32,6 +32,7 @@ except ImportError:
 
 TYPES = (("image", "Images"), ("video", "Videos"), ("audio", "Audio"))
 MIN_MATCH_SIZE = 100          # "Hide small matches" floor
+MATCH_COLUMNS = (("site", "Site"), ("tag", "Tag"), ("size", "Results"))
 STRIP_THUMB, STRIP_GAP, STRIP_MAX = 72, 6, 300
 MAX_LOG_LINES = 50000
 NOTICE = ("This tool collects media from public sites, several of which host adult material (18+ only).\n\n"
@@ -222,12 +223,14 @@ class CollectorApp(tk.Tk):
 
         box = ttk.Frame(f)
         box.pack(fill="both", expand=True)
-        self.match_tree = ttk.Treeview(box, columns=("name", "size"), show="headings", selectmode="extended",
+        self.match_tree = ttk.Treeview(box, columns=("site", "tag", "size"), show="headings", selectmode="extended",
                                        height=3)
-        self.match_tree.heading("name", text="Match")
-        self.match_tree.heading("size", text="Size")
-        self.match_tree.column("name", width=200, minwidth=80, stretch=True)
-        self.match_tree.column("size", width=56, minwidth=40, stretch=False, anchor="e")
+        self.match_sort = None                      # (column, descending) once a heading is clicked
+        for col, text in MATCH_COLUMNS:
+            self.match_tree.heading(col, text=text, command=lambda c=col: self._sort_matches(c))
+        self.match_tree.column("site", width=78, minwidth=50, stretch=False)
+        self.match_tree.column("tag", width=130, minwidth=60, stretch=True)
+        self.match_tree.column("size", width=60, minwidth=44, stretch=False, anchor="e")
         sb = ttk.Scrollbar(box, orient="vertical", command=self.match_tree.yview)
         self.match_tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
@@ -650,14 +653,41 @@ class CollectorApp(tk.Tk):
         self._silent = sorted(site for site, n, _ in reports if n == 0)
         self._render_matches()
 
+    def _sort_matches(self, col):
+        """Clicking a heading sorts by it; clicking again reverses. Results start with the biggest."""
+        if self.match_sort and self.match_sort[0] == col:
+            desc = not self.match_sort[1]
+        else:
+            desc = col == "size"
+        self.match_sort = (col, desc)
+        self._render_matches()
+
+    def _match_order(self):
+        rows = list(enumerate(self.matches))
+        if not self.match_sort:
+            return rows
+        col, desc = self.match_sort
+        if col == "size":                             # unknown sizes always go last
+            known = sorted((r for r in rows if r[1]["count"] is not None), key=lambda r: r[1]["count"], reverse=desc)
+            return known + [r for r in rows if r[1]["count"] is None]
+        key = (lambda r: (r[1]["site"].lower(), -(r[1]["count"] or 0))) if col == "site" else \
+            (lambda r: str(r[1].get("tag") or r[1]["label"]).lower())
+        return sorted(rows, key=key, reverse=desc)
+
     def _render_matches(self):
         self.match_tree.delete(*self.match_tree.get_children())
+        for col, text in MATCH_COLUMNS:
+            arrow = ""
+            if self.match_sort and self.match_sort[0] == col:
+                arrow = " \u25bc" if self.match_sort[1] else " \u25b2"
+            self.match_tree.heading(col, text=text + arrow)
         shown = 0
-        for i, m in enumerate(self.matches):
+        for i, m in self._match_order():
             if (self.hide_small.get() and m["count"] is not None and m["count"] < MIN_MATCH_SIZE
                     and not m.get("nofilter")):
                 continue
-            self.match_tree.insert("", "end", iid=str(i), values=(m["label"], short(m["count"])))
+            self.match_tree.insert("", "end", iid=str(i),
+                                   values=(m["site"], m.get("tag") or m["label"], short(m["count"])))
             shown += 1
         hidden = len(self.matches) - shown
         silent = getattr(self, "_silent", [])

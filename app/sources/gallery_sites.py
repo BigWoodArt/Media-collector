@@ -13,6 +13,8 @@ import json
 import os
 import random
 import re
+import threading
+import time
 import urllib.error
 import urllib.parse
 
@@ -275,6 +277,75 @@ class PornPicsSource(_GallerySite):
             out.append(f"{self.base_url}/search/srch.php?q={urllib.parse.quote_plus(query)}&lang=en&limit=20&offset={off}")
         out += [f"{listing_url}{sep}limit=20&offset={off}", f"{listing_url}{sep}offset={off}",
                 f"{listing_url}{sep}page={n}"]
+        return out
+
+    MAX_DEPTH = 1000             # the site stops listing after this many galleries for any tag or search
+
+    def _size(self, url, deadline):
+        """How many galleries a listing holds (at most MAX_DEPTH): pages are 20 long, so find the last page."""
+        sep = "&" if "?" in url else "?"
+        sizes = {}
+
+        def page(off):
+            if off not in sizes:
+                try:
+                    sizes[off] = len(self._gallery_links(self._get_text(f"{url}{sep}limit=20&offset={off}")))
+                except Exception:
+                    sizes[off] = 0
+            return sizes[off]
+        if not page(0):
+            return 0
+        last = self.MAX_DEPTH - 20
+        if page(last):
+            return self.MAX_DEPTH
+        lo, hi = 0, last
+        while hi - lo > 20 and time.time() < deadline:
+            mid = (lo + hi) // 40 * 20
+            lo, hi = (mid, hi) if page(mid) else (lo, mid)
+        return lo + sizes[lo]
+
+    @classmethod
+    def suggest(cls, query):
+        q = (query or "").strip()
+        slug = "-".join(re.findall(r"[a-z0-9]+", q.lower()))
+        if not slug:
+            return []
+        site = cls()
+        site.min_interval = 0.3
+        base = cls.base_url
+        deadline = time.time() + 9
+        # the plain search, the straight category, and the site's orientation tags (shemale, gay) for the same word
+        entries = [(q, f"{cls.label} {q}", f"{base}/search/srch.php?q={urllib.parse.quote_plus(q)}&lang=en")]
+        entries += [(f"{base}/{slug}/", f"{cls.label} {q} (straight)", f"{base}/{slug}/"),
+                    (f"{base}/tags/{slug}/", f"{cls.label} {q} (tag)", f"{base}/tags/{slug}/")]
+        entries += [(f"{base}/tags/{slug}-{o}/", f"{cls.label} {q} ({o})", f"{base}/tags/{slug}-{o}/")
+                    for o in ("shemale", "gay")]
+        found = {}
+
+        def look(value, label, url):
+            mine = cls()
+            mine.min_interval = 0.3
+            n = mine._size(url, deadline)
+            if n:
+                found[value] = {"value": value, "label": label, "count": n, "nofilter": True}
+        threads = [threading.Thread(target=look, args=e, daemon=True) for e in entries]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(max(0.1, deadline - time.time() + 3))
+        out = [found[e[0]] for e in entries if e[0] in found]
+        try:                                                # related tags the site itself offers for the word
+            raw = site._get_text(site._search_url(q)).replace("\\/", "/")
+            seen = {o["value"] for o in out}
+            for m in cls.tag_re.finditer(raw):
+                name = m.group(2)
+                url = f"{base}/tags/{name}/"
+                if url not in seen and all(w in name for w in slug.split("-")):
+                    seen.add(url)
+                    out.append({"value": url, "label": f"{cls.label} {name.replace('-', ' ')} (tag)", "count": None,
+                                "nofilter": True})
+        except Exception:
+            pass
         return out
 
     def _parse_gallery(self, raw, url):

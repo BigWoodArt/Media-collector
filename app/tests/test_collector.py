@@ -183,21 +183,22 @@ class PersistenceAndRanking(unittest.TestCase):
         self.assertEqual([(m["source"], m["value"]) for m in r],
                          [("b", "big"), ("a", "mid"), ("b", "mid"), ("a", "nosize")])
 
-    def test_suggest_all_keeps_a_small_sites_best_matches_under_the_cap(self):
+    def test_suggest_all_keeps_five_per_site_and_splits_site_from_tag(self):
         class Big(FakeSource):
             id, label = "big", "Big"
             @classmethod
             def suggest(cls, q):
-                return [{"value": f"b{i}", "count": 1000000 - i} for i in range(10)]
+                return [{"value": f"b{i}", "label": f"Big tag{i}", "count": 1000000 - i} for i in range(10)]
         class Small(FakeSource):
             id, label = "small", "Small"
             @classmethod
             def suggest(cls, q):
-                return [{"value": "s1", "count": 800}, {"value": "s2", "count": 700}, {"value": "s3", "count": 600}]
+                return [{"value": "s1", "count": 800}, {"value": "s2", "count": 700}]
         with mock.patch.dict(SOURCE_BY_ID, {"big": Big, "small": Small}):
-            r = suggest_all("x", ["big", "small"], max_results=5)
-        self.assertEqual([m["value"] for m in r if m["source"] == "small"], ["s1", "s2"])
+            r = suggest_all("x", ["big", "small"])
         self.assertEqual(sum(m["source"] == "big" for m in r), 5)
+        self.assertEqual([m["value"] for m in r if m["source"] == "small"], ["s1", "s2"])
+        self.assertEqual(r[0]["tag"], "tag0")
 
     def test_verbose_log_has_start_http_and_end_lines_and_no_secrets(self):
         tmp = tempfile.mkdtemp()

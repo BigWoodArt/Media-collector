@@ -500,10 +500,11 @@ def has_lookup(cls):
     return cls.suggest.__func__ is not Source.suggest.__func__
 
 
-def suggest_all(query, source_ids=None, timeout=15.0, min_count=0, max_results=80, report=None):
+def suggest_all(query, source_ids=None, timeout=15.0, min_count=0, per_site=5, report=None):
     """Ask every site that supports it for real matches. Returns the most popular first across ALL sites:
     [{"source": id, "site": label, "value", "label", "count"}]. Matches with a known size under min_count are
-    dropped; matches with no known size go last. A slow or broken site just contributes nothing."""
+    dropped; matches with no known size go last. Each site keeps its best per_site matches. A slow or broken
+    site just contributes nothing."""
     ids = source_ids or list(SOURCE_BY_ID)
     results, lock = [], threading.Lock()
 
@@ -518,8 +519,10 @@ def suggest_all(query, source_ids=None, timeout=15.0, min_count=0, max_results=8
             report(cls.label, len(found), round(time.time() - t0, 1))
         with lock:
             for m in found:
+                label = m.get("label") or str(m["value"])
+                tag = label[len(cls.label):].strip() if label.lower().startswith(cls.label.lower()) else label
                 results.append({"source": sid, "site": cls.label, "value": m["value"],
-                                "label": m.get("label") or m["value"], "count": m.get("count"),
+                                "label": label, "tag": tag or label, "count": m.get("count"),
                                 "nofilter": bool(m.get("nofilter"))})
 
     threads = [threading.Thread(target=one, args=(sid,), daemon=True) for sid in ids]
@@ -539,13 +542,11 @@ def suggest_all(query, source_ids=None, timeout=15.0, min_count=0, max_results=8
     names = {query.strip().lower().lstrip("#"), query.strip().lower().replace(" ", ""),
              query.strip().lower().replace(" ", "_")}
     out.sort(key=lambda r: (str(r["value"]).lower() not in names, r["count"] is None, -(r["count"] or 0)))
-    kept, present = out[:max_results], {}               # big sites must not crowd a small site out entirely
-    for r in kept:
-        present[r["source"]] = present.get(r["source"], 0) + 1
-    for r in out[max_results:]:
-        if present.get(r["source"], 0) < 2:
+    kept, taken = [], {}
+    for r in out:
+        if taken.get(r["source"], 0) < per_site:
             kept.append(r)
-            present[r["source"]] = present.get(r["source"], 0) + 1
+            taken[r["source"]] = taken.get(r["source"], 0) + 1
     return kept
 
 

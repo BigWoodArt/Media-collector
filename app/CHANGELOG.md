@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.1.12
+- **Find list:** three columns (Site, Tag, Results); click a heading to sort, click again to reverse. At most 5 matches per site. PornPics Find shows the plain search, the straight category, and the Shemale/Gay versions of the word (e.g. blonde-shemale) with result counts (the site lists at most 1000 per search).
 - **New sites:** PornPics and Babehub (`sources/gallery_sites.py`). Search, open each gallery, download every picture inside; tags and a minimum rating. No date on either site. Both are in Find > Match: Babehub lists matching tags, models and channels with counts plus galleries; PornPics lists tags and galleries. Babehub searches use its tag, model and channel pages (its own search box only returns the home page).
 - **Reddit albums:** a post with several photos now downloads every photo, in album order (was the first only).
 - **Reddit images:** video stills and link previews (small, or Redgifs-watermarked) are no longer saved as images. Pictures under 400 px on the short side are skipped.

@@ -162,14 +162,33 @@ class FindLists(unittest.TestCase):
         with mock.patch.object(cls, "_get_text", lambda self, url: listing):
             return cls.suggest("blonde")
 
-    def test_pornpics_find(self):
-        page = pp_listing([1001, 1002]) + "<a href='/tags/blonde-teen/'>x</a><a href='/tags/brunette/'>y</a>"
-        r = self.run_suggest("pornpics", page)
-        vals = [m["value"] for m in r]
-        self.assertEqual(vals[0], "blonde")
-        self.assertIn("https://www.pornpics.com/tags/blonde-teen/", vals)
-        self.assertNotIn("https://www.pornpics.com/tags/brunette/", vals)
-        self.assertEqual(sum(m["label"].endswith("(gallery)") for m in r), 2)
+    def test_pornpics_find_lists_search_category_and_orientation_tags_with_sizes(self):
+        import re
+        from unittest import mock
+        from sources import SOURCE_BY_ID
+        cls = SOURCE_BY_ID["pornpics"]
+        sizes = {"/search/srch.php": 1000, "/blonde/": 25, "/tags/blonde-shemale/": 1000}
+
+        def get(self, url):
+            path = url.split("?")[0].replace("https://www.pornpics.com", "")
+            off = int((re.search(r"offset=(\d+)", url) or [0, 0])[1])
+            if path == "/tags/blonde-gay/" or path == "/tags/blonde/":
+                raise OSError("404")
+            if path == "/" and "q=blonde" in url:                     # the search page itself: related tags
+                return pp_listing([1001]) + "<a href='/tags/blonde-teen/'>x</a><a href='/tags/brunette/'>y</a>"
+            n = max(0, min(20, sizes.get(path, 0) - off))
+            return pp_listing(range(2000 + off, 2000 + off + n))
+        with mock.patch.object(cls, "_get_text", get):
+            r = cls.suggest("blonde")
+        by = {m["label"]: m["count"] for m in r}
+        self.assertEqual(by["PornPics blonde"], 1000)
+        self.assertEqual(by["PornPics blonde (straight)"], 25)
+        self.assertEqual(by["PornPics blonde (shemale)"], 1000)
+        self.assertNotIn("PornPics blonde (gay)", by)
+        self.assertEqual(by["PornPics blonde teen (tag)"], None)
+        self.assertNotIn("PornPics brunette (tag)", by)
+        self.assertEqual([m["value"] for m in r][:3],
+                         ["blonde", "https://www.pornpics.com/blonde/", "https://www.pornpics.com/tags/blonde-shemale/"])
 
     def test_babehub_find_lists_tags_models_and_galleries(self):
         from unittest import mock
@@ -198,7 +217,11 @@ class FindLists(unittest.TestCase):
         self.assertEqual(sum(m["label"].endswith("(gallery)") for m in r), 2)
 
     def test_nothing_listed_gives_nothing(self):
-        self.assertEqual(self.run_suggest("pornpics", "<html></html>"), [])
+        from unittest import mock
+        from sources import SOURCE_BY_ID
+        cls = SOURCE_BY_ID["pornpics"]
+        with mock.patch.object(cls, "_get_text", lambda self, url: "<html></html>"):
+            self.assertEqual(cls.suggest("blonde"), [])
 
     def test_has_lookup(self):
         from sources import SOURCE_CLASSES
